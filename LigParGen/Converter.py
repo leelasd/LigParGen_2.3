@@ -148,7 +148,7 @@ def convert(**kwargs):
         optim = 0
         lbcc = False
         a0,rd,pt = LoadModel()
-        #os.system('cp cm5pars.json %s /tmp/'%qorca)
+        os.system('cp  %s /tmp/'%qorca)
         os.chdir('/tmp/')
         data_cm5 = GetLogFile(qorca,pt,rd)
         qcm5 = HirshfeldToCM5(data_cm5,a0,netcharge=charge)
