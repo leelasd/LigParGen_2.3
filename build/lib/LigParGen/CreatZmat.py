@@ -49,7 +49,7 @@ def GenMolRep(ifile,optim,resid,charge):
     iform = ifile.split('.')
     try: 
         AsitIsZmat(ifile,optim,resid) 
-    except ZeroDivisionError:
+    except (ZeroDivisionError,IndexError):
         print('Warning!!\n 1.Cannonicalising Input MOL/PDB file\n 2.Atom ordering may change \n 3.But the Coordinates remain the same')
         CanonicaliedZmat(ifile,optim,resid)
     Get_OPT('%s.z' % resid, optim, charge)
