@@ -1,7 +1,7 @@
 # LigParGen_2.3
 
 
-Python script to convert BOSS generated OPLS-AA/CM1A(-LBCC) parameters to:
+Python package to convert BOSS generated OPLS-AA/CM1A(-LBCC) & OPLS-AA/CM5 parameters to:
 
 - OpenMM PDB AND XML FILES,
 - CHARMM RTF AND PRM FILES,
@@ -12,10 +12,16 @@ Python script to convert BOSS generated OPLS-AA/CM1A(-LBCC) parameters to:
 - tinker xyz and key files 
 - .Q.param and  lib files for package Q
 
+### Whats New ? ###
+
+** OPLS-AA/CM5 FF parameters  with ORCA log file as input ** 
+
 ### authors: ###
 
 * [Leela S. Dodda](https://github.com/leelasd) - `<leela.dodda@yale.edu>`
-* [Matt Robinson](https://github.com/mc-robinson) - `<matthew.robinson@yale.edu>`
+* [Israel Cabeza de Vaca]() - `<israel.cabezadevaca@yale.edu>`
+* [Ayan Bhattacharjee]() - `<abhattacharjee.me@gmail.com>`
+* [Matt Robinson](https://github.com/mc-robinson) 
 
 ### REQUIREMENTS: ###
 - BOSS (need to set BOSSdir in bashrc and cshrc)
@@ -44,12 +50,7 @@ if using PDB file:
 if using BOSS SMILES CODE: 
 `LigParGen -s 'c1ccc(cc1)O' -r PHN -c 0 -o 0 -l` 
 
-### What more to do ? ###
 
--  Create BOSS2AMBER  (JTR)
--  Create Halogen bond extra site feature
--  ** Create RelFEP setup for BOSS, MCPro, Gromacs and NAMD (Code is done by LSD & MR)**
--  Include RelFEP in server as **Alchemist** ?? (IC)
 
 ### Who do I talk to? ###
 

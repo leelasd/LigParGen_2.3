@@ -60,9 +60,10 @@ def main():
     argparse
     numpy
     openbabel
+    networkx
 
     Please cite following references: 
-    1. web server: an automatic OPLS-AA parameter generator for organic ligands  
+    1. LigParGen web server: an automatic OPLS-AA parameter generator for organic ligands  
        Leela S. Dodda  Israel Cabeza de Vaca  Julian Tirado-Rives William L. Jorgensen 
        Nucleic Acids Research, Volume 45, Issue W1, 3 July 2017, Pages W331-W336
     2. 1.14*CM1A-LBCC: Localized Bond-Charge Corrected CM1A Charges for Condensed-Phase Simulations
