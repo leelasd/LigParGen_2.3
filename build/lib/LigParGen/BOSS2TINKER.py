@@ -354,8 +354,7 @@ def Boss2CharmmTorsion(bnd_df, num2opls, st_no, molecule_data, num2typ2symb):
 def create_xyz_file(residue_name,mol):
     boss_xyz = mol.MolData['XYZ']
     # convert .pdb to Tinker style .xyz file
-    os.system('obabel -ipdb /tmp/%s.pdb -otxyz -O/tmp/%s.xyz >& LLN' % (residue_name,residue_name))
-
+    os.system('babel -ipdb %s.pdb -otxyz %s.xyz > LLN 2>&1' % (residue_name,residue_name))
     # Read in the file
     with open('/tmp/%s.xyz' % residue_name, 'r') as xyz_file:
         xyz_data = xyz_file.readlines()

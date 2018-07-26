@@ -1,3 +1,4 @@
+README.md
 setup.py
 LigParGen/BOSS2CHARMM.py
 LigParGen/BOSS2DESMOND.py
