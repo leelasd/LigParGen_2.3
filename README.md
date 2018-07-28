@@ -11,6 +11,7 @@ Python package to convert BOSS generated OPLS-AA/CM1A(-LBCC) & OPLS-AA/CM5 param
 - LAMMPS lmp and data FILES
 - tinker xyz and key files 
 - .Q.param and  lib files for package Q
+- Desmond cms file 
 
 ### Whats New ? ###
 
