@@ -35,6 +35,7 @@ Python package to convert BOSS generated OPLS-AA/CM1A(-LBCC) & OPLS-AA/CM5 param
 
 ### Installation instructions ###
 
+`conda install -c rdkit rdkit`
 `python setup.py install`
 
 ### Usage 
