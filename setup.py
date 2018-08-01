@@ -15,7 +15,7 @@ setup(
         'Programming Language :: Python :: 2.7',
         'Topic :: Scientific/Engineering',
         ],
-  install_requires=['numpy','pandas'],
+  install_requires=['numpy','pandas','networkx'],
   entry_points={
         'console_scripts': [
             'LigParGen=LigParGen.Converter:main',
