@@ -31,7 +31,7 @@ Python package to convert BOSS generated OPLS-AA/CM1A(-LBCC) & OPLS-AA/CM5 param
 - argparse
 - numpy
 - openbabel (for 2D to 3D conversion)
-- RDKit when CM5 charges are requested
+- RDKit for CM5 charges
 
 ### Installation instructions ###
 
