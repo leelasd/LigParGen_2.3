@@ -65,7 +65,8 @@ def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, xmlf):
             if ats[i][j] < 0:
                 ats[i][j] = 0
     at_df = pd.DataFrame(ats, columns=['I', 'J', 'K', 'L'])
-    final_df = pd.concat([dhd_df, at_df], axis=1, join_axes=[at_df.index])
+    final_df = pd.concat([dhd_df, at_df], axis=1)
+    final_df = final_df.reindex(at_df.index)
     bndlist = list(bnd_df.UR) + (list(bnd_df.UR))
     final_df['TY'] = ['Proper' if ucomb(list([final_df.I[n], final_df.J[n], final_df.K[
         n], final_df.L[n]]), bndlist) == 3 else 'Improper' for n in range(len(final_df.I))]
@@ -82,7 +83,7 @@ def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, xmlf):
         tor_bos = final_df.drop(
             ['I', 'J', 'K', 'L', 'TI', 'TJ', 'TK', 'TL'], 1)
         tor_bos = tor_bos.drop_duplicates()
-        df = final_df.ix[tor_bos.index][['TI', 'TJ', 'TK', 'TL',
+        df = final_df.iloc[tor_bos.index][['TI', 'TJ', 'TK', 'TL',
                                          'V1', 'V2', 'V3', 'V4', 'TY', 'I', 'J', 'K', 'L']]
         torlist = []
         for row in df[df.TY == 'Proper'].iterrows():
@@ -126,7 +127,7 @@ def boss2opmBond(num2opls, molecule_data, st_no, xmlf):
     xmlf.write('<HarmonicBondForce>\n')
     for i in bnd_df.index:
         xmlf.write('<Bond class1=\"%s\" class2=\"%s\" length=\"%6.6f\" k=\"%6.6f\"/>\n' %
-                   (bnd_df.ix[i]['T1'], bnd_df.ix[i]['T2'], bnd_df.ix[i]['RIJ'], bnd_df.ix[i]['KIJ']))
+                   (bnd_df.iloc[i]['T1'], bnd_df.iloc[i]['T2'], bnd_df.iloc[i]['RIJ'], bnd_df.iloc[i]['KIJ']))
     xmlf.write('</HarmonicBondForce>\n')
     return full_bnd, connects
 
