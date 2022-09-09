@@ -222,8 +222,10 @@ def print_ZMAT(atoms, G_mol, mol_icords, coos, zmat_name, resid):
         ofile.write('%4d %-3s%5d%5d%5d%12.6f%4d%12.6f%4d%12.6f%4s%5d\n'
                     % (i, Z_ATOMS[i], Z_NO[i], Z_NO[i], Z_BONDS[i][1], Z_BONDS[i][-1], Z_ANGLES[i][-2], Z_ANGLES[i][-1], Z_TORSIONS[i][-2], Z_TORSIONS[i][-1], resid[0:3], 1)
                     )
-    ofile.write('''                    Geometry Variations follow    (2I4,F12.6)
-                    Variable Bonds follow         (I4)\n''')
+    ofile.write(
+        '''                    Geometry Variations follow    (2I4,F12.6)
+                    Variable Bonds follow         (I4)\n'''
+                )
     for i in range(4, len(atoms) + 3):
         ofile.write('%4d\n' % i)
     ofile.write('                    Additional Bonds follow       (2I4)\n')

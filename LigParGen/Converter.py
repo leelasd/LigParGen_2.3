@@ -13,6 +13,8 @@ from LigParGen.fepzmat import CM5_file2zmat
 import argparse
 import pickle
 import os
+from zipfile import ZipFile
+import glob
 
 def main():
 
@@ -99,7 +101,7 @@ def main():
     convert(**vars(args))
 
 def convert(**kwargs):
-
+    starting_dir = os.getcwd()
     # set the default values
     options = {
             'opt' : 0,
@@ -214,8 +216,14 @@ def convert(**kwargs):
     print('DONE WITH DESMOND')
     mainBOSS2TINKER(resname, clu)
     print('DONE WITH TINKER')
+    with ZipFile(starting_dir+'/%s.zip'%resname, 'w') as zipObj2:
+        for f in glob.glob('/tmp/%s.*'%resname):
+            zipObj2.write(f,os.path.basename(f))
+    zipObj2.close()
     os.remove(resname + ".p")
     mol.cleanup()
+    os.chdir(starting_dir)
+    print('DONE WITH ALL \n Back to %s'%starting_dir)
 
 if __name__ == "__main__":
   
