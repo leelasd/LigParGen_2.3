@@ -13,7 +13,6 @@ def convert_pdb2mol(pdbfile):
     obConversion.SetInAndOutFormats("pdb", "mol")
     mol = openbabel.OBMol()
     obConversion.ReadFile(mol, pdbfile)   # Open Babel will uncompress automatically
-    mol.AddHydrogens()
     obConversion.WriteFile(mol, mol_file)
     return mol_file
 
