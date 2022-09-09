@@ -9,12 +9,14 @@ from LigParGen.BOSS2DESMOND import mainBOSS2DESMOND
 from LigParGen.BOSS2TINKER import mainBOSS2TINKER 
 from LigParGen.CreatZmat import GenMolRep
 from LigParGen.Orca2CM5charges import LoadModel, GetLogFile, HirshfeldToCM5,AddCM5Charges
+from LigParGen.mol_boss import convert_pdb2mol
 from LigParGen.fepzmat import CM5_file2zmat
 import argparse
 import pickle
 import os
 from zipfile import ZipFile
 import glob
+import shutil
 
 def main():
 
@@ -166,16 +168,21 @@ def convert(**kwargs):
         GenMolRep('%s.smi' % resname, optim, resname, charge)
         mol = BOSSReader('%s.z' % resname, optim, charge, lbcc)
     elif mol != None:
-        os.system('cp %s /tmp/' % mol)
+        mol_file_path = os.path.basename(mol) 
+        shutil.copyfile(mol_file_path,'/tmp/%s'%mol)
+#        os.system('cp %s /tmp/' % mol)
         os.chdir('/tmp/')
         GenMolRep(mol, optim, resname, charge)
         mol = BOSSReader('%s.z' % resname, optim, charge, lbcc)
     elif pdb != None:
-        os.system('cp %s /tmp/' % pdb)
+        pdb_file_path = os.path.basename(pdb) 
+        shutil.copyfile(pdb_file_path,'/tmp/%s'%pdb)
+        #os.system('cp %s /tmp/' % pdb)
         os.chdir('/tmp/')
-        GenMolRep(pdb, optim, resname, charge)
+        mol_file = convert_pdb2mol(pdb)
+        GenMolRep(mol_file, optim, resname, charge)
         mol = BOSSReader('%s.z' % resname, optim, charge, lbcc)
-        clu = True
+#        clu = True
     elif zmat != None:
         os.system('cp %s /tmp/%s.z' % (zmat,resname))
         os.chdir('/tmp/')

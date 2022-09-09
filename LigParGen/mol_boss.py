@@ -3,7 +3,19 @@
 # BONDING INFO AND ASSIGNING BCC CORRECTIONS FOR ATOMS
 import numpy as np
 import pandas as pd
+import openbabel
 
+def convert_pdb2mol(pdbfile):
+    print('Converting PDB to MOL using OpenBabel')
+    prefix = pdbfile.split('.')[0]
+    mol_file = '%s.mol'%prefix
+    obConversion = openbabel.OBConversion()
+    obConversion.SetInAndOutFormats("pdb", "mol")
+    mol = openbabel.OBMol()
+    obConversion.ReadFile(mol, pdbfile)   # Open Babel will uncompress automatically
+    mol.AddHydrogens()
+    obConversion.WriteFile(mol, mol_file)
+    return mol_file
 
 def rev_bnd(bnd):
     a, b = bnd.split('-')
