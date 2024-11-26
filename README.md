@@ -1,5 +1,7 @@
 # LigParGen_2.3
 
+![PyPI Downloads](https://static.pepy.tech/badge/ligpargen)
+
 
 Python package to convert BOSS generated OPLS-AA/CM1A(-LBCC) & OPLS-AA/CM5 parameters to:
 
