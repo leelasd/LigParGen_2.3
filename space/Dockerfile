@@ -6,6 +6,7 @@ FROM --platform=linux/amd64 python:3.12-slim-bookworm
 RUN dpkg --add-architecture i386 \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
+        git \
         csh \
         tcsh \
         libc6:i386 \
