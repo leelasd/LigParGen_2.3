@@ -15,7 +15,13 @@ setup(
         'Programming Language :: Python :: 2.7',
         'Topic :: Scientific/Engineering',
         ],
-  install_requires=['numpy','pandas','networkx'],
+  install_requires=[
+        'numpy==2.4.6',
+        'pandas==2.3.3',
+        'rdkit==2025.9.6',
+        'networkx==3.5',
+        'openbabel==3.2.1',
+        ],
   entry_points={
         'console_scripts': [
             'LigParGen=LigParGen.Converter:main',

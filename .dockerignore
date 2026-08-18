@@ -1,0 +1,8 @@
+.git
+.github
+docs
+tests
+*.md
+__pycache__
+*.pyc
+.claude

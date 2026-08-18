@@ -1,3 +1,9 @@
+# rdkit must be imported before openbabel: with the pinned rdkit==2025.9.6 /
+# openbabel==3.2.1 wheels, importing openbabel's native extension first causes
+# a segfault when rdkit.Chem is imported afterward (reproduced on the Docker
+# base image from #5). BOSSReader -> mol_boss imports openbabel, so rdkit has
+# to load first, here, before any other LigParGen submodule.
+from rdkit import Chem  # noqa: F401
 from LigParGen.BOSSReader import BOSSReader, CheckForHs
 from LigParGen.BOSS2OPENMM import mainBOSS2OPM
 from LigParGen.BOSS2CHARMM import mainBOSS2CHARMM

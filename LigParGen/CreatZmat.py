@@ -18,14 +18,37 @@ from LigParGen.Vector_algebra import pairing_func, angle, dihedral, tor_id, ang_
 import itertools
 import collections
 import networkx as nx
+from openbabel import openbabel as ob
+from openbabel import pybel
+
+
+def _babel_gen3d(ifile, iform):
+    # Equivalent to `babel -i<fmt> <ifile> -omol <out>.mol --gen3D`: OBBuilder +
+    # MMFF94 minimization + weighted-rotor conformer search, same OBOp the CLI runs.
+    # pybel.Molecule.make3D() is NOT equivalent (skips the conformer search).
+    mol = pybel.readstring(iform[1], open(ifile).read())
+    gen3d = ob.OBOp.FindType("Gen3D")
+    gen3d.Do(mol.OBMol, "")
+    mol.write("mol", "%s.mol" % iform[0], overwrite=True)
+
 
 def AsitIsZmat(ifile,optim,resid):
     iform = ifile.split('.')
     # CREATE A MOL FILE FROM ANY FILE
     if iform[1] == 'smi':
-        os.system('babel -i%s %s -omol %s.mol --gen3D' % (iform[1], ifile, iform[0]))
+        _babel_gen3d(ifile, iform)
     else:
-        os.system('babel -i%s %s -omol %s.mol ---errorlevel 1 -b &>LL' % (iform[1], ifile, iform[0]))
+        # Equivalent to `babel -i<fmt> <ifile> -omol <out>.mol --errorlevel 1 -b`:
+        # critical-errors-only logging + dative-bond normalization.
+        ob.obErrorLog.SetOutputLevel(ob.obError)
+        conv = ob.OBConversion()
+        conv.SetInAndOutFormats(iform[1], "mol")
+        obmol = ob.OBMol()
+        conv.ReadFile(obmol, ifile)
+        dative = ob.OBOp.FindType("b")
+        if dative is not None:
+            dative.Do(obmol, "")
+        conv.WriteFile(obmol, "%s.mol" % iform[0])
     mollines = open(iform[0] + '.mol', 'r').readlines()
     COOS, ATYPES, MolBonds = ReadMolFile(mollines)
     G_mol, mol_icords = make_graphs(ATYPES, COOS, MolBonds)
@@ -36,9 +59,16 @@ def CanonicaliedZmat(ifile,optim,resid):
     iform = ifile.split('.')
     # CREATE A MOL FILE FROM ANY FILE
     if iform[1] == 'smi':
-        os.system('babel -i%s %s -omol %s.mol --gen3D' % (iform[1], ifile, iform[0]))
+        _babel_gen3d(ifile, iform)
     else:
-        os.system('babel -i%s %s -omol --canonical %s.mol' % (iform[1], ifile, iform[0]))
+        # Equivalent to `babel -i<fmt> <ifile> -omol --canonical <out>.mol`.
+        conv = ob.OBConversion()
+        conv.SetInAndOutFormats(iform[1], "mol")
+        obmol = ob.OBMol()
+        conv.ReadFile(obmol, ifile)
+        canon = ob.OBOp.FindType("canonical")
+        canon.Do(obmol, "")
+        conv.WriteFile(obmol, "%s.mol" % iform[0])
     mollines = open(iform[0] + '.mol', 'r').readlines()
     COOS, ATYPES, MolBonds = ReadMolFile(mollines)
     G_mol, mol_icords = make_graphs(ATYPES, COOS, MolBonds)
@@ -135,7 +165,7 @@ def make_graphs(atoms, coos, bonds):
     all_imps = {}
     for i in imp_keys:
         nei = list(G.neighbors(i))
-        if G.node[i]['atno'] == 6:
+        if G.nodes[i]['atno'] == 6:
             all_imps[i] = [nei[0], i, nei[1], nei[2]]
     MOL_ICOORDS = {'BONDS': all_bonds,
                    'ANGLES': dict_new_angs, 'TORSIONS': dict_new_tors, 'IMPROPERS': all_imps}
@@ -180,7 +210,7 @@ def print_ZMAT(atoms, G_mol, mol_icords, coos, zmat_name, resid):
     for i in range(1, len(atoms) + 1):
         Z_ATOMS[i + 2] = atoms[i]
     for i in range(1, len(atoms) + 1):
-        Z_NO[i + 2] = G_mol.node[i]['atno']
+        Z_NO[i + 2] = G_mol.nodes[i]['atno']
     n_ats = 0
     B_LINK = {}
     for i in G_mol.nodes():

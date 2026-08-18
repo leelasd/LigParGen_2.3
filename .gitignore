@@ -113,3 +113,9 @@ venv.bak/
 
 
 # End of https://www.gitignore.io/api/python
+
+# Licensed BOSS install staged for Docker builds (see ADR-0001) -- never commit this.
+/docker/boss/
+
+# Claude Code agent worktrees
+/.claude/

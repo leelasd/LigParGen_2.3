@@ -159,7 +159,7 @@ def boss2CharmmBond(molecule_data, st_no):
                     (bnd_df.cl1 + bnd_df.cl2 + 1) * 0.5) + bnd_df.cl2
     bnd_df['UR'] = ((bnd_df.cl1 + bnd_df.cl2) *
                     (bnd_df.cl1 + bnd_df.cl2 + 1) * 0.5) + bnd_df.cl1
-    hb_df = bnd_df.drop(['cl1', 'cl2', 'UF', 'UR'], 1)
+    hb_df = bnd_df.drop(['cl1', 'cl2', 'UF', 'UR'], axis=1)
     hb_df = hb_df.drop_duplicates()
     return bnd_df
 

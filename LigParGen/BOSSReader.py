@@ -25,7 +25,7 @@ def LinCheck(fname):
         if 'Geometry Variations follow ' in zlines[l]: imp_dat = l
     Atypes = []
     for l in zlines[1:imp_dat]:Atypes.append(l.split()[2])
-    Atypes = np.array(Atypes,dtype=np.int)
+    Atypes = np.array(Atypes,dtype=int)
     Atypes = Atypes[Atypes<0]
     Check =False
     if len(Atypes)>2: Check = True
