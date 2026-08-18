@@ -187,9 +187,15 @@ def build_ui():
                 gr.Markdown("**Or draw a structure:**")
                 ketcher_html = gr.HTML(KETCHER_HTML)
                 ketcher_hidden = gr.Textbox(visible=False)
+                # Two separate event bindings, not a .click().then() chain -- matches
+                # the proven-working simonduerr/gradio-2dmoleculeeditor pattern. A
+                # chained .then() after a JS-only (fn=None) step does not reliably
+                # forward the JS-computed value to the next step (reproduced live:
+                # the hidden textbox never left its default " " placeholder value).
                 gr.Button("Use drawn structure").click(
                     fn=None, inputs=[], outputs=[ketcher_hidden], js=KETCHER_GET_SMILES_JS
-                ).then(fn=lambda s: s, inputs=[ketcher_hidden], outputs=[smiles_box])
+                )
+                ketcher_hidden.change(fn=lambda s: s, inputs=[ketcher_hidden], outputs=[smiles_box])
 
                 gr.Markdown("**Or upload a MOL/PDB file** (must include all hydrogens):")
                 upload = gr.File(label="MOL or PDB file", file_types=[".mol", ".pdb"])

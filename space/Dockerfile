@@ -34,7 +34,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY --chown=user app.py .
 
-ENV GRADIO_SERVER_NAME=0.0.0.0
+ENV GRADIO_SERVER_NAME=0.0.0.0 \
+    PYTHONUNBUFFERED=1
 EXPOSE 7860
 
 CMD ["python", "app.py"]
