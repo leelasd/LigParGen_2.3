@@ -143,10 +143,26 @@ KETCHER_HTML = """
 <p style="padding:0.2rem 1rem 0 0;color:#888; font-size:1rem">loading structure editor</p>
 </div>
 <div id="root" style="height:420px"></div>
+<button id="ketcher-use-btn" type="button"
+        style="width:100%;margin-top:8px;padding:8px;border-radius:6px;border:none;
+               background:#4b5563;color:white;cursor:pointer;font-size:1rem">
+  Use drawn structure
+</button>
 """
 
 # Ketcher 2.7.2, pinned per docs/research/ketcher-and-molecule3d-integration.md --
 # newer versions have a known getSmiles() regression on some structures.
+#
+# The "Use drawn structure" button lives inside this HTML block as a plain
+# <button>, wired here via direct DOM manipulation rather than Gradio's
+# js=/fn=None event-return mechanism -- that mechanism did not reliably fire
+# on real user clicks in this Gradio version (reproduced live: getSmiles()
+# worked when called from the console, but neither a real click nor a
+# programmatic .click() on a Gradio-wired button ever invoked it, per
+# instrumentation that counted calls to a wrapped getSmiles()). Writing
+# straight to the target textbox's <textarea> and dispatching a native
+# "input" event is the standard, robust way to feed a Gradio-bound
+# component from custom JS.
 KETCHER_LOAD_JS = """
 async () => {
   let url = "https://huggingface.co/datasets/simonduerr/ketcher-2.7.2/raw/main/static/css/main.6a646761.css";
@@ -162,15 +178,16 @@ async () => {
     document.head.appendChild(script);
     document.getElementById('loading').style.display = 'none';
   });
+
+  document.getElementById('ketcher-use-btn').addEventListener('click', async () => {
+    const smi = await ketcher.getSmiles();
+    const textarea = document.querySelector('#smiles_box textarea');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(textarea, smi);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  });
 }
 """
-
-KETCHER_GET_SMILES_JS = """
-async () => {
-  return ketcher.getSmiles().then(function(smi){ return smi; });
-}
-"""
-
 
 def build_ui():
     with gr.Blocks(title="LigParGen") as demo:
@@ -179,23 +196,15 @@ def build_ui():
         with gr.Row():
             with gr.Column():
                 gr.Markdown("### Step 1: Input structure")
-                smiles_box = gr.Textbox(label="SMILES", placeholder="Enter SMILES, e.g. c1ccccc1")
+                smiles_box = gr.Textbox(
+                    label="SMILES", placeholder="Enter SMILES, e.g. c1ccccc1", elem_id="smiles_box"
+                )
                 gr.Button("Sample: Benzene").click(
                     lambda: "c1ccccc1", inputs=None, outputs=smiles_box
                 )
 
                 gr.Markdown("**Or draw a structure:**")
                 ketcher_html = gr.HTML(KETCHER_HTML)
-                ketcher_hidden = gr.Textbox(visible=False)
-                # Two separate event bindings, not a .click().then() chain -- matches
-                # the proven-working simonduerr/gradio-2dmoleculeeditor pattern. A
-                # chained .then() after a JS-only (fn=None) step does not reliably
-                # forward the JS-computed value to the next step (reproduced live:
-                # the hidden textbox never left its default " " placeholder value).
-                gr.Button("Use drawn structure").click(
-                    fn=None, inputs=[], outputs=[ketcher_hidden], js=KETCHER_GET_SMILES_JS
-                )
-                ketcher_hidden.change(fn=lambda s: s, inputs=[ketcher_hidden], outputs=[smiles_box])
 
                 gr.Markdown("**Or upload a MOL/PDB file** (must include all hydrogens):")
                 upload = gr.File(label="MOL or PDB file", file_types=[".mol", ".pdb"])
