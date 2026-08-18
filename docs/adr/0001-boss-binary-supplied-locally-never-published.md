@@ -1,0 +1,3 @@
+# BOSS binary is supplied locally at build time, never committed or published
+
+BOSS is proprietary, "all rights reserved" academic software (non-profit/for-profit license PDFs, no open redistribution grant) — we have no right to commit it to the public `LigParGen_2.3` repo or bake it into any Docker image pushed to a public registry. The Dockerfile instead `COPY`s BOSS in from a local, gitignored directory expected in the build context, and fails fast with a clear error if it's missing. Anyone building the image must already hold their own licensed copy of BOSS. This means the published image recipe is public, but a working image can only be built by someone who separately has BOSS.

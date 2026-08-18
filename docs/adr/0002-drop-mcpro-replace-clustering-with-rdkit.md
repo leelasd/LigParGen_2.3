@@ -1,0 +1,3 @@
+# Drop MCPRO; replace its conformer-clustering step with RDKit
+
+LigParGen's only runtime use of MCPRO is conformer clustering via `$MCPROdir/miscexec/clu` in `CreatZmat.py`. MCPRO is proprietary like BOSS (same licensing constraints as ADR-0001) and bundling a second licensed binary just for one clustering step isn't worth the packaging and licensing cost. We're dropping MCPRO entirely and reimplementing conformer clustering with RDKit's conformer-generation/clustering API instead. This removes a dependency but means the replacement's clustering behavior won't be bit-identical to MCPRO's `clu` — validated against the regression fixtures, not by algorithmic equivalence.
