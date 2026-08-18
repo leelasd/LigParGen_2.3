@@ -1,0 +1,16 @@
+REMARK    BOSS Z-Matrix with LSDautozmat
+REMARK    Created by BOSS 4.9 June 15 Linux 
+ATOM      1  C00 PHN     1       1.000   1.000   0.000
+ATOM      2  C01 PHN     1      -0.409   1.000   0.000
+ATOM      3  C02 PHN     1      -1.115   1.000   1.220
+ATOM      4  C03 PHN     1      -0.410   1.000   2.440
+ATOM      5  C04 PHN     1       0.997   1.000   2.439
+ATOM      6  C05 PHN     1       1.703   1.000   1.220
+ATOM      7  O06 PHN     1      -1.078   1.000   3.627
+ATOM      8  H07 PHN     1       1.542   1.000  -0.935
+ATOM      9  H08 PHN     1      -0.948   1.000  -0.936
+ATOM     10  H09 PHN     1      -2.195   1.000   1.200
+ATOM     11  H0A PHN     1       1.535   1.000   3.376
+ATOM     12  H0B PHN     1       2.784   1.000   1.224
+ATOM     13  H0C PHN     1      -2.017   1.000   3.531
+END

@@ -1,0 +1,17 @@
+1 molecule converted
+/app/LigParGen/BOSS2OPENMM.py:83: FutureWarning: In a future version of pandas all arguments of DataFrame.drop except for the argument 'labels' will be keyword-only.
+  tor_bos = final_df.drop(
+/app/LigParGen/BOSS2Q.py:163: FutureWarning: In a future version of pandas all arguments of DataFrame.drop except for the argument 'labels' will be keyword-only.
+  hb_df = bnd_df.drop(['cl1', 'cl2', 'UF', 'UR'], 1)
+/app/LigParGen/BOSS2XPLOR.py:174: FutureWarning: In a future version of pandas all arguments of DataFrame.drop except for the argument 'labels' will be keyword-only.
+  hb_df = bnd_df.drop(['cl1', 'cl2', 'UF', 'UR'], 1)
+/app/LigParGen/BOSS2CHARMM.py:162: FutureWarning: In a future version of pandas all arguments of DataFrame.drop except for the argument 'labels' will be keyword-only.
+  hb_df = bnd_df.drop(['cl1', 'cl2', 'UF', 'UR'], 1)
+/app/LigParGen/BOSS2GMX.py:128: FutureWarning: In a future version of pandas all arguments of DataFrame.drop except for the argument 'labels' will be keyword-only.
+  tor_bos = final_df.drop(
+/app/LigParGen/BOSS2LAMMPS.py:136: FutureWarning: In a future version of pandas all arguments of DataFrame.drop except for the argument 'labels' will be keyword-only.
+  hb_df = bnd_df.drop(['cl1', 'cl2', 'UF', 'UR'], 1)
+/app/LigParGen/BOSS2DESMOND.py:65: FutureWarning: In a future version of pandas all arguments of DataFrame.drop except for the argument 'labels' will be keyword-only.
+  tor_bos = final_df.drop(
+/app/LigParGen/BOSS2TINKER.py:286: FutureWarning: In a future version of pandas all arguments of DataFrame.drop except for the argument 'labels' will be keyword-only.
+  hb_df = bnd_df.drop(['cl1', 'cl2', 'UF', 'UR'], 1)
