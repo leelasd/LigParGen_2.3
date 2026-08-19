@@ -17,9 +17,12 @@ numpy
 from collections import OrderedDict
 from LigParGen.BOSSReader import Refine_PDB_file,get_coos_from_pdb
 from LigParGen.BOSSReader import ucomb,bossPdbAtom2Element,bossElement2Mass,tor_cent
+from rdkit import Chem
 import pickle
 import pandas as pd
 import numpy as np
+
+_PERIODIC_TABLE = Chem.GetPeriodicTable()
 
 
 def printDihed(tdat):
@@ -156,18 +159,38 @@ def boss2opmAngle(anglefile, num2opls, st_no, xmlf):
 
 def bossData(molecule_data):
     ats_file = molecule_data.MolData['ATOMS']
+    # Elements come from MolData['XYZ']'s own atomic-number column, not
+    # bossPdbAtom2Element's name-based guess (strip trailing char, drop
+    # digits): that heuristic assumes LigParGen's own "C00"/"H0A"-style
+    # generated atom names and mistypes real atom names this package
+    # doesn't generate itself, e.g. an amino-acid-style "CH1" comes out as
+    # element "CH" and crashes bossElement2Mass. The atomic number BOSS
+    # itself reports is unambiguous regardless of naming convention.
+    xyz = molecule_data.MolData['XYZ']
     types = []
     for i in enumerate(ats_file):
         types.append([i[1].split()[1], 'opls_' + i[1].split()[2]])
-    st_no = 3
+    # st_no offsets a bonded-pair's raw Zmat atom index down to a 0-based
+    # index into types/Qs/num2opls (which start at the first REAL atom).
+    # LigParGen's own auto-generated Zmats always place exactly 2 leading
+    # dummy atoms, so the first real atom's raw index is always 3 -- but
+    # BOSS's own reference Zmat library is inconsistent about this (some
+    # files use 2 leading dummies, some 3, some place the dummies after
+    # the first real atom instead of before), so hardcoding 3 silently
+    # mis-indexes bonded pairs for anything that isn't the 2-leading-dummy
+    # case, and can even index out of range (reproduced on his.z).
+    # Reading it from the first real atom's own raw index is correct for
+    # both conventions.
+    st_no = int(ats_file[0].split()[0])
     Qs = molecule_data.MolData['Q_LJ']
     assert len(Qs) == len(types), 'Please check the at_info and Q_LJ_dat files'
+    assert len(xyz) == len(types), 'Please check the at_info and XYZ data'
     num2typ2symb = {i: types[i] for i in range(len(Qs))}
     for i in range(len(Qs)):
-        num2typ2symb[i].append(bossPdbAtom2Element(
-            num2typ2symb[i][0]) + num2typ2symb[i][1][-3:])
-        num2typ2symb[i].append(bossPdbAtom2Element(num2typ2symb[i][0]))
-        num2typ2symb[i].append(bossElement2Mass(num2typ2symb[i][3]))
+        elem = _PERIODIC_TABLE.GetElementSymbol(int(xyz['at_num'][i]))
+        num2typ2symb[i].append(elem + num2typ2symb[i][1][-3:])
+        num2typ2symb[i].append(elem)
+        num2typ2symb[i].append(bossElement2Mass(elem))
         num2typ2symb[i].append(Qs[i][0])
     num2opls = {}
     for i in num2typ2symb.keys():
@@ -179,19 +202,24 @@ def bossData(molecule_data):
     return (types, Qs, num2opls, st_no, num2typ2symb, num2pqrtype)
 
 
-def pdb_prep(atoms, coos, resid, connects):
+def pdb_prep(atoms, coos, resid, connects, elems=None):
     # Columns 77-78 (element symbol) are optional per the PDB spec but are
     # what OpenBabel/3Dmol.js/RDKit rely on to type each atom when re-reading
     # this file back -- without them, downstream readers fall back to
     # guessing from the atom name and can mistype atoms entirely (confirmed
     # live: OpenBabel warns on every atom when BOSS2TINKER re-reads this
     # file, and the Space's 3D preview render was degraded the same way).
+    # elems, when given, is the atomic-number-derived element per atom
+    # (aligned with atoms/coos) computed in bossData() -- passed through
+    # here rather than re-derived from the atom name via
+    # bossPdbAtom2Element, which mistypes non-LigParGen-style atom names
+    # (e.g. an amino-acid-style "CH1").
     opdb = open(resid + '.pdb', 'w+')
     opdb.write('REMARK LIGPARGEN GENERATED PDB FILE\n')
     num = 0
-    for (i, j) in zip(atoms, coos):
+    for idx, (i, j) in enumerate(zip(atoms, coos)):
         num += 1
-        elem = bossPdbAtom2Element(i)
+        elem = elems[idx] if elems is not None else bossPdbAtom2Element(i)
         opdb.write('%-6s%5d %4s %3s  %4d    %8.3f%8.3f%8.3f%6.2f%6.2f          %2s\n' %
                    ('ATOM', num, i, resid, 1, j[0], j[1], j[2], 1.00, 0.00, elem))
     opdb.write('TER \n')
@@ -253,7 +281,8 @@ def boss2opm(resid, molecule_data, pdb_file):
     xmlf.close()
     pdblines = Refine_PDB_file(pdb_file)
     atoms, coos = get_coos_from_pdb(pdblines)
-    pdb_prep(atoms, coos, resid, connects)
+    elems = [num2typ2symb[i][3] for i in range(len(atoms))] if len(atoms) == len(num2typ2symb) else None
+    pdb_prep(atoms, coos, resid, connects, elems)
     pqr_prep(atoms, coos, resid, connects, num2pqrtype)
     return None
 
