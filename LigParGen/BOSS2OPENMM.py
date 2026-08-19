@@ -43,14 +43,18 @@ def boss2opmAtom(num2typ2symb, xmlf):
 
 
 def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, xmlf):
-    dhd = []
-    for line in molecule_data.MolData['TORSIONS']:
-        dt = [float(l) for l in line]
-        dhd.append(dt)
-    dhd = np.array(dhd)
-    dhd = dhd * 4.184  # kcal to kj conversion
-    dhd = dhd / 2.0  # Komm = Vopls/2
-    dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
+    # BOSS's own "Angle" column in the Fourier Coefficients table is a
+    # 1-based index into the full declared-dihedral sequence (Variable
+    # Dihedrals follow, then Additional Dihedrals follow, in that order --
+    # see BOSSReader.get_ImpDat's TORinit/TORfinal slice). That table is
+    # NOT guaranteed one row per declared quadruple: BOSS can skip a
+    # quadruple it can't match to a known torsion type (confirmed: this
+    # happens for some of BOSS's own re-derived Additional Dihedrals once
+    # a molecule's ring bonds/angles are completed). Pairing by this
+    # declared-order index -- MolData['TORSIONS_BY_DECL_IDX'] -- instead
+    # of assuming row N always means declared quadruple N is what keeps
+    # this correct when rows are skipped, rather than either mispairing
+    # silently or asserting the (previously exact-count-required) match.
     ats = []
     for line in molecule_data.MolData['ATOMS'][3:]:
         dt = [line.split()[0], line.split()[4],
@@ -60,9 +64,21 @@ def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, xmlf):
     for line in molecule_data.MolData['ADD_DIHED']:
         dt = [int(l) for l in line]
         ats.append(dt)
-    assert len(ats) == len(
-        dhd), 'Number of Dihedral angles in Zmatrix and Out file dont match'
-    ats = np.array(ats) - st_no
+
+    tors_by_idx = molecule_data.MolData['TORSIONS_BY_DECL_IDX']
+    paired_ats, paired_dhd = [], []
+    for decl_idx, quad in enumerate(ats, start=1):
+        coeffs = tors_by_idx.get(decl_idx)
+        if coeffs is None:
+            continue
+        paired_ats.append(quad)
+        paired_dhd.append([float(v) for v in coeffs])
+
+    dhd = np.array(paired_dhd)
+    dhd = dhd * 4.184  # kcal to kj conversion
+    dhd = dhd / 2.0  # Komm = Vopls/2
+    dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
+    ats = np.array(paired_ats) - st_no
     for i in range(len(ats)):
         for j in range(len(ats[0])):
             if ats[i][j] < 0:

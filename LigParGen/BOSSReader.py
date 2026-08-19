@@ -352,6 +352,34 @@ class BOSSReader(object):
                         ntor = ntor + 1
         return (tors)
 
+    def get_tors_by_decl_idx(self, data):
+        """Same 'Fourier Coefficients' section as get_tors(), but keyed by
+        each row's own 'Angle' column (data[0]) -- BOSS's 1-based index
+        into the full declared-dihedral sequence (Variable Dihedrals
+        follow, then Additional Dihedrals follow, in that order) -- rather
+        than returned as a plain list.
+
+        This table is not guaranteed to have exactly one row per declared
+        dihedral quadruple: BOSS can skip a quadruple entirely if it can't
+        match its atom-type pattern against a known torsion type (observed
+        directly: declaring a ring's internal bonds/angles as Additional
+        entries makes BOSS re-derive more Additional Dihedrals than it
+        ends up tabulating rows for). Assuming row N of this table always
+        corresponds to the Nth declared quadruple -- what the plain list
+        from get_tors() invites -- silently mispairs coefficients to atoms
+        as soon as any row is skipped. The 'Angle' column sidesteps that:
+        it's BOSS's own declaration-order index, so row N's coefficients
+        can be matched to declared quadruple N directly, keyed lookup
+        instead of positional zip, correct even with skipped rows.
+        """
+        tors = {}
+        for line in data:
+            if 'All Solutes' in line:
+                fields = line.split()
+                decl_idx = int(fields[0])
+                tors[decl_idx] = fields[4:8]
+        return tors
+
     def get_QLJ(self, data):
         qlj = []
         nqlj = 0
@@ -494,6 +522,8 @@ class BOSSReader(object):
         MolData['ANGLES'] = self.get_angs(
             odat[impDat['ANGinit']:impDat['ANGfinal']])
         MolData['TORSIONS'] = self.get_tors(
+            odat[impDat['TORinit']:impDat['TORfinal']])
+        MolData['TORSIONS_BY_DECL_IDX'] = self.get_tors_by_decl_idx(
             odat[impDat['TORinit']:impDat['TORfinal']])
         MolData['ADD_DIHED'] = self.get_addihed(
             sdat[impDat['ADDinit']:impDat['ADDfinal']])
