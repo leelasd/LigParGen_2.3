@@ -23,6 +23,12 @@ setup(
         'networkx==3.5',
         'openbabel==3.2.1',
         ],
+  extras_require={
+        # BOSSReader-level unit tests (tests/) -- feed captured BOSS
+        # out/sum text straight into BOSSReader's parsing methods, no
+        # Docker/BOSS/license needed to run them. See issue #23.
+        'test': ['pytest'],
+    },
   entry_points={
         'console_scripts': [
             'LigParGen=LigParGen.Converter:main',

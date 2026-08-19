@@ -1,0 +1,32 @@
+REMARK     Ac-His-NHMe OPLS-AA/M        
+REMARK    Created by BOSS 4.9 June 15 Linux 
+ATOM      1  H1  ACE     1       2.000   1.000   0.000
+ATOM      2  CH3 ACE     1       2.000   2.090   0.000
+ATOM      3  C   ACE     1       3.426   2.621   0.000
+ATOM      4  H2  ACE     1       1.467   2.431   0.887
+ATOM      5  H3  ACE     1       1.465   2.431  -0.886
+ATOM      6  O   ACE     1       4.377   1.844  -0.010
+ATOM      7  N   HIS     2       3.575   3.947   0.008
+ATOM      8  CA  HIS     2       4.842   4.669   0.075
+ATOM      9  C   HIS     2       4.516   6.119   0.475
+ATOM     10  HN  HIS     2       2.765   4.552   0.069
+ATOM     11  CB  HIS     2       5.610   4.575  -1.268
+ATOM     12  CG  HIS     2       7.120   4.612  -1.127
+ATOM     13  ND1 HIS     2       7.803   5.784  -0.823
+ATOM     14  CE1 HIS     2       9.092   5.503  -0.768
+ATOM     15  NE2 HIS     2       9.261   4.229  -1.018
+ATOM     16  HE  HIS     2       9.812   6.289  -0.541
+ATOM     17  CD2 HIS     2       8.059   3.635  -1.247
+ATOM     18  HNE HIS     2      10.154   3.756  -1.038
+ATOM     19  HD  HIS     2       8.011   2.570  -1.473
+ATOM     20  HA  HIS     2       5.438   4.221   0.872
+ATOM     21  HB1 HIS     2       5.382   3.633  -1.767
+ATOM     22  HB2 HIS     2       5.293   5.356  -1.960
+ATOM     23  O   HIS     2       3.357   6.447   0.741
+ATOM     24  NT  AME     3       5.526   6.990   0.513
+ATOM     25  CT  AME     3       5.394   8.390   0.885
+ATOM     26  HN  AME     3       6.436   6.649   0.202
+ATOM     27  HT1 AME     3       6.362   8.887   0.833
+ATOM     28  HT2 AME     3       4.707   8.904   0.212
+ATOM     29  HT3 AME     3       5.012   8.484   1.903
+END
