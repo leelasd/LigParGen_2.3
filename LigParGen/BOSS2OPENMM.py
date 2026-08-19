@@ -180,13 +180,20 @@ def bossData(molecule_data):
 
 
 def pdb_prep(atoms, coos, resid, connects):
+    # Columns 77-78 (element symbol) are optional per the PDB spec but are
+    # what OpenBabel/3Dmol.js/RDKit rely on to type each atom when re-reading
+    # this file back -- without them, downstream readers fall back to
+    # guessing from the atom name and can mistype atoms entirely (confirmed
+    # live: OpenBabel warns on every atom when BOSS2TINKER re-reads this
+    # file, and the Space's 3D preview render was degraded the same way).
     opdb = open(resid + '.pdb', 'w+')
     opdb.write('REMARK LIGPARGEN GENERATED PDB FILE\n')
     num = 0
     for (i, j) in zip(atoms, coos):
         num += 1
-        opdb.write('%-6s%5d %4s %3s  %4d    %8.3f%8.3f%8.3f\n' %
-                   ('ATOM', num, i, resid, 1, j[0], j[1], j[2]))
+        elem = bossPdbAtom2Element(i)
+        opdb.write('%-6s%5d %4s %3s  %4d    %8.3f%8.3f%8.3f%6.2f%6.2f          %2s\n' %
+                   ('ATOM', num, i, resid, 1, j[0], j[1], j[2], 1.00, 0.00, elem))
     opdb.write('TER \n')
     for i in range(len(connects)):
         opdb.write('%s \n' % connects[i])
