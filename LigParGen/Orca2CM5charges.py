@@ -12,6 +12,7 @@ import os
 import argparse
 from rdkit import Chem
 from rdkit.Chem import AllChem
+from rdkit.Chem import rdDetermineBonds
 
 def AddCM5Charges(mol,qcm5): 
     qcm5.to_csv('CM5_charges.csv',index=False,float_format='%6.4f')
@@ -99,8 +100,8 @@ def HirshfeldToCM5(df,a0,netcharge):
                 qcm5=qcm5+factor*DVALS[r.AtNum-1,p.AtNum-1]
         cm5_charges.append(qcm5)
     df['QCM5']     = np.array(cm5_charges) 
-    #df['QCM5']     = df.QCM5 - (netcharge-df.QCM5.sum())/len(df.QCM5) 
-    mol = xyz_prep(df)
+    #df['QCM5']     = df.QCM5 - (netcharge-df.QCM5.sum())/len(df.QCM5)
+    mol = xyz_prep(df,netcharge)
     df['FPS'] = [AtomFPProgram(mol,atomNum,radii=2) for atomNum in df.index]
     uniq_fps = list(set(df.FPS))
     df['QCM5_AVG'] = [df[df.FPS==i].QCM5.mean() for i in df.FPS]
@@ -112,19 +113,24 @@ def HirshfeldToCM5(df,a0,netcharge):
     #print(df.sum())
     return(df)
 
-def xyz_prep(df):
-    opdb = open('inp_orca.xyz', 'w+')
-    opdb.write('%3d\n'%(len(df.QCM5)))
-    opdb.write('REMARK LIGPARGEN GENERATED XYZ FILE\n')
-    num = 0
-    for (i, r) in df.iterrows(): 
-        opdb.write('%-6s    %8.3f%8.3f%8.3f\n' %
-                   (r.ATOM, r.X, r.Y, r.Z))
-    opdb.close()
-    os.system('babel -ixyz inp_orca.xyz -omol UNK.mol')
-    os.system('babel -ixyz inp_orca.xyz -opdb inp_orca.pdb')
-    hmol = Chem.MolFromMolFile('UNK.mol',removeHs=False,sanitize=False)
-    return hmol 
+def xyz_prep(df,netcharge):
+    # Build the RDKit mol directly from the coordinates/elements already in
+    # `df` and let rdDetermineBonds infer connectivity + bond orders from
+    # the geometry (no OpenBabel shell-out, no intermediate xyz/mol files).
+    mol = Chem.RWMol()
+    conf = Chem.Conformer(len(df))
+    for num, (i, r) in enumerate(df.iterrows()):
+        atom = Chem.Atom(int(r.AtNum))
+        mol.AddAtom(atom)
+        conf.SetAtomPosition(num, (float(r.X), float(r.Y), float(r.Z)))
+    mol.AddConformer(conf)
+    rdDetermineBonds.DetermineBonds(mol, charge=netcharge)
+    hmol = mol.GetMol()
+    # inp_orca.pdb is consumed downstream (Converter.py copies it to
+    # /tmp/<resname>.pdb for the qorca code path), so keep writing it --
+    # just from the RDKit mol instead of via a babel round-trip.
+    Chem.MolToPDBFile(hmol, 'inp_orca.pdb')
+    return hmol
 
 def LoadModel(): 
     import json
