@@ -22,19 +22,25 @@ BOSS is proprietary software supplied to this Space at runtime from a private, a
 
 Besides the web form, this Space runs as an [MCP](https://modelcontextprotocol.io) server (Gradio's built-in `mcp_server=True`), so an MCP-aware agent can call `run_ligpargen` directly instead of a human filling out the form. Same 200-atom limit, job timeout, and rate limit as the UI apply.
 
-SSE endpoint:
+Streamable HTTP endpoint (preferred):
+
+```
+https://lsdodda-ligpargen.hf.space/gradio_api/mcp/
+```
+
+SSE endpoint (older transport, still served, kept for clients that only speak SSE):
 
 ```
 https://lsdodda-ligpargen.hf.space/gradio_api/mcp/sse
 ```
 
-For an SSE-capable client (e.g. Claude Desktop's `mcpServers` config):
+For a client with native remote-MCP support (e.g. Claude Desktop's `mcpServers` config):
 
 ```json
 {
   "mcpServers": {
     "ligpargen": {
-      "url": "https://lsdodda-ligpargen.hf.space/gradio_api/mcp/sse"
+      "url": "https://lsdodda-ligpargen.hf.space/gradio_api/mcp/"
     }
   }
 }
@@ -47,7 +53,7 @@ For a stdio-only client, bridge via [`mcp-remote`](https://www.npmjs.com/package
   "mcpServers": {
     "ligpargen": {
       "command": "npx",
-      "args": ["mcp-remote", "https://lsdodda-ligpargen.hf.space/gradio_api/mcp/sse"]
+      "args": ["mcp-remote", "https://lsdodda-ligpargen.hf.space/gradio_api/mcp/"]
     }
   }
 }
