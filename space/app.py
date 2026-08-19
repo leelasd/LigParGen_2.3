@@ -112,42 +112,48 @@ def build_preview_sdf(pdb_path, resname, template_smiles=None):
     should fall back to the raw PDB preview in that case rather than show
     nothing.
     """
-    pdb_mol = Chem.MolFromPDBFile(pdb_path, removeHs=False, sanitize=True)
-    if pdb_mol is None:
-        return None
+    try:
+        pdb_mol = Chem.MolFromPDBFile(pdb_path, removeHs=False, sanitize=True)
+        if pdb_mol is None:
+            print("build_preview_sdf: MolFromPDBFile returned None for %r" % pdb_path)
+            return None
 
-    fixed = None
-    if template_smiles:
-        template = Chem.MolFromSmiles(template_smiles)
-        if template is not None:
-            try:
-                fixed = AllChem.AssignBondOrdersFromTemplate(template, pdb_mol)
-            except ValueError:
-                fixed = None  # SMILES didn't match this PDB's connectivity -- fall through
+        fixed = None
+        if template_smiles:
+            template = Chem.MolFromSmiles(template_smiles)
+            if template is None:
+                print("build_preview_sdf: MolFromSmiles(%r) returned None" % template_smiles)
+            else:
+                try:
+                    fixed = AllChem.AssignBondOrdersFromTemplate(template, pdb_mol)
+                except ValueError as exc:
+                    print("build_preview_sdf: AssignBondOrdersFromTemplate failed (%s) -- "
+                          "falling back to geometry-based perception" % exc)
+                    fixed = None
 
-    if fixed is None:
-        rw = Chem.RWMol()
-        conf = Chem.Conformer(pdb_mol.GetNumAtoms())
-        pdb_conf = pdb_mol.GetConformer()
-        for i, atom in enumerate(pdb_mol.GetAtoms()):
-            rw.AddAtom(Chem.Atom(atom.GetSymbol()))
-            pos = pdb_conf.GetAtomPosition(i)
-            conf.SetAtomPosition(i, Point3D(pos.x, pos.y, pos.z))
-        rw.AddConformer(conf, assignId=True)
-        try:
+        if fixed is None:
+            rw = Chem.RWMol()
+            conf = Chem.Conformer(pdb_mol.GetNumAtoms())
+            pdb_conf = pdb_mol.GetConformer()
+            for i, atom in enumerate(pdb_mol.GetAtoms()):
+                rw.AddAtom(Chem.Atom(atom.GetSymbol()))
+                pos = pdb_conf.GetAtomPosition(i)
+                conf.SetAtomPosition(i, Point3D(pos.x, pos.y, pos.z))
+            rw.AddConformer(conf, assignId=True)
             rdDetermineBonds.DetermineBonds(rw, charge=0, embedChiral=False)
             Chem.SanitizeMol(rw)
             fixed = rw
-        except Exception:  # noqa: BLE001 -- geometry-based perception can fail on odd structures
-            return None
 
-    sdf_path = os.path.join(os.path.dirname(pdb_path), "%s_preview.sdf" % resname)
-    try:
+        sdf_path = os.path.join(os.path.dirname(pdb_path), "%s_preview.sdf" % resname)
         with Chem.SDWriter(sdf_path) as writer:
             writer.write(fixed)
-    except Exception:  # noqa: BLE001 -- never let a preview-only step break the job
+        return sdf_path
+    except Exception as exc:  # noqa: BLE001 -- never let a preview-only step break the job
+        import traceback
+        print("build_preview_sdf: failed for %r (resname=%s, template_smiles=%r): %s" % (
+            pdb_path, resname, template_smiles, exc))
+        traceback.print_exc()
         return None
-    return sdf_path
 
 
 def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, progress=gr.Progress()):
