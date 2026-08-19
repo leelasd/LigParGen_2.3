@@ -369,15 +369,27 @@ def run_ligpargen(
     longer than about a minute, and submissions from the same client are
     rate-limited.
 
+    Provide smiles_text (a typed SMILES string, e.g. "c1ccccc1" for
+    benzene) or upload_file (a MOL file with all hydrogens already
+    explicit, or a PDB file). A PDB upload_file should be paired with
+    smiles_text, which is then used as a trusted template to fix the
+    PDB's bond orders and add any missing hydrogens. charge_model
+    "1.14*CM1A-LBCC (neutral molecules)" forces charge to "0"
+    regardless of the charge argument; only "1.14*CM1A (neutral or
+    charged)" honors a nonzero charge.
+
     Args:
-        smiles_text: SMILES string for the molecule, e.g. "c1ccccc1" for benzene. Required unless upload_file is a MOL file. Can be combined with a PDB upload_file, in which case it is used as a trusted template to fix that PDB's bond orders and add any missing hydrogens.
-        upload_file: Path or URL to a PDB or MOL file to convert instead of (or, for a PDB, alongside) smiles_text. MOL files must already include all hydrogens explicitly. Leave unset to submit SMILES only.
-        opt_iters: Number of BOSS geometry-optimization iterations to run, as a string integer from "0" (no optimization) to "3".
-        charge_model: Partial-charge scheme to use. "1.14*CM1A-LBCC (neutral molecules)" only supports a neutral molecule -- charge is forced to "0" regardless of the charge argument. "1.14*CM1A (neutral or charged)" supports any of the charge values below.
-        charge: Net formal charge of the molecule, as a string integer. Ignored (forced to "0") when charge_model is the LBCC scheme.
+        smiles_text: SMILES string for the molecule.
+        upload_file: PDB or MOL file to convert, as a path or URL.
+        opt_iters: BOSS optimization iterations, "0" to "3".
+        charge_model: Partial-charge scheme -- see description above.
+        charge: Net formal charge of the molecule.
 
     Returns:
-        A 3-tuple: path to a .zip file with all output formats, path to an SDF or PDB file of the optimized geometry for 3D preview (or None if a preview could not be built), and a short human-readable status message.
+        A 3-tuple: path to a .zip file with all output formats, path to
+        an SDF or PDB file of the optimized geometry for 3D preview (or
+        None if a preview could not be built), and a short human-readable
+        status message.
     """
     start_time = time.perf_counter()
     smiles_text = (smiles_text or "").strip()
