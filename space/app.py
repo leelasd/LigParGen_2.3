@@ -11,24 +11,54 @@ BOSS is fetched into this container at startup from a private HF Dataset
 repo (see docs/adr/0003 in the main repo) -- never committed here, never
 baked into the image.
 """
+import collections
 import glob
+import json
+import multiprocessing
 import os
 import random
 import shutil
+import signal
 import string
 import tempfile
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 import gradio as gr
 from gradio_molecule3d import Molecule3D
-from huggingface_hub import snapshot_download
+from huggingface_hub import CommitScheduler, snapshot_download
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdDetermineBonds
+from rdkit.Geometry import Point3D
 
 from LigParGen.Converter import convert
 
 MAX_ATOMS = 200
 BOSS_DIR = "/home/user/boss"
 BOSS_REPO = os.environ.get("BOSS_ASSET_REPO", "lsdodda/ligpargen-boss-assets")
+
+# A single BOSS run blocking the (concurrency_limit=1) queue indefinitely on
+# a pathological input would stall every other visitor's job behind it --
+# see run_convert_with_timeout().
+JOB_TIMEOUT_S = int(os.environ.get("JOB_TIMEOUT_S", "60"))
+
+# Basic per-client submission cap -- see check_rate_limit(). In-memory only
+# (resets on restart/redeploy): acceptable for a single-worker Space with no
+# other persistent state, and avoids standing up external infra for v1.
+RATE_LIMIT_MAX = int(os.environ.get("RATE_LIMIT_MAX", "5"))
+RATE_LIMIT_WINDOW_S = int(os.environ.get("RATE_LIMIT_WINDOW_S", "600"))
+_rate_limit_lock = threading.Lock()
+_submission_log = collections.defaultdict(list)
+
+# Anonymous usage metrics -- job counts/sizes/outcomes only, never the
+# submitted structure itself or any request/session identifier -- pushed
+# periodically to a private HF Dataset. See setup_usage_scheduler().
+USAGE_REPO = os.environ.get("USAGE_METRICS_REPO", "lsdodda/ligpargen-usage-metrics")
+USAGE_LOG_DIR = Path("/tmp/usage_logs")
+USAGE_LOG_FILE = USAGE_LOG_DIR / "usage.jsonl"
+_usage_scheduler = None
 
 
 def fetch_boss():
@@ -90,9 +120,236 @@ def count_heavy_and_h_atoms(smiles=None, file_path=None):
     return mol.GetNumAtoms()
 
 
-def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, progress=gr.Progress()):
+def build_preview_sdf(pdb_path, resname, template_smiles=None):
+    """Build an SDF (bond orders intact) from the final optimized PDB, for
+    the 3D viewer.
+
+    PDB has no bond-order field, so feeding Molecule3D the raw output PDB
+    rendered every bond as an undifferentiated single stick, no visible
+    double/triple/aromatic bonds -- gradio_molecule3d only accepts
+    pdb/sdf/mol2/pdb1 (checked directly against its bundled JS), not a bare
+    .mol, so SDF (a MOL block plus an optional data section RDKit's
+    SDWriter already produces) is the right target format here, not MOL.
+
+    Reuses the same AssignBondOrdersFromTemplate technique as
+    LigParGen.mol_boss.convert_pdb2mol_with_smiles when a trusted SMILES is
+    available (maps the final geometry's connectivity through known-correct
+    bond orders), falling back to RDKit's geometry-based rdDetermineBonds
+    when it isn't (a plain PDB upload with no accompanying SMILES).
+
+    Returns the SDF path, or None if nothing could be built -- callers
+    should fall back to the raw PDB preview in that case rather than show
+    nothing.
+    """
+    try:
+        pdb_mol = Chem.MolFromPDBFile(pdb_path, removeHs=False, sanitize=True)
+        if pdb_mol is None:
+            print("build_preview_sdf: MolFromPDBFile returned None for %r" % pdb_path)
+            return None
+
+        fixed = None
+        if template_smiles:
+            template = Chem.MolFromSmiles(template_smiles)
+            if template is None:
+                print("build_preview_sdf: MolFromSmiles(%r) returned None" % template_smiles)
+            else:
+                try:
+                    fixed = AllChem.AssignBondOrdersFromTemplate(template, pdb_mol)
+                except ValueError as exc:
+                    print("build_preview_sdf: AssignBondOrdersFromTemplate failed (%s) -- "
+                          "falling back to geometry-based perception" % exc)
+                    fixed = None
+
+        if fixed is None:
+            rw = Chem.RWMol()
+            conf = Chem.Conformer(pdb_mol.GetNumAtoms())
+            pdb_conf = pdb_mol.GetConformer()
+            for i, atom in enumerate(pdb_mol.GetAtoms()):
+                rw.AddAtom(Chem.Atom(atom.GetSymbol()))
+                pos = pdb_conf.GetAtomPosition(i)
+                conf.SetAtomPosition(i, Point3D(pos.x, pos.y, pos.z))
+            rw.AddConformer(conf, assignId=True)
+            rdDetermineBonds.DetermineBonds(rw, charge=0, embedChiral=False)
+            Chem.SanitizeMol(rw)
+            fixed = rw
+
+        sdf_path = os.path.join(os.path.dirname(pdb_path), "%s_preview.sdf" % resname)
+        with Chem.SDWriter(sdf_path) as writer:
+            writer.write(fixed)
+        return sdf_path
+    except Exception as exc:  # noqa: BLE001 -- never let a preview-only step break the job
+        import traceback
+        print("build_preview_sdf: failed for %r (resname=%s, template_smiles=%r): %s" % (
+            pdb_path, resname, template_smiles, exc))
+        traceback.print_exc()
+        return None
+
+
+def setup_usage_scheduler():
+    """Set up anonymous usage-metrics logging (job counts/sizes/outcomes,
+    never the submitted structure or any request/session identifier) via a
+    CommitScheduler pushing to a private HF Dataset -- the same
+    runtime-fetch/private-repo pattern already used for the BOSS asset
+    store (docs/adr/0003). Returns None (and log_usage() becomes a no-op)
+    if HF_TOKEN isn't set or the scheduler fails to start, so a
+    misconfigured or rate-limited token disables logging rather than
+    blocking the app from serving conversions at all -- usage tracking is
+    a nice-to-have, not a hard dependency for the app's actual job."""
+    token = os.environ.get("HF_TOKEN")
+    if not token:
+        print("HF_TOKEN not set -- usage metrics logging disabled.")
+        return None
+    try:
+        return CommitScheduler(
+            repo_id=USAGE_REPO,
+            repo_type="dataset",
+            folder_path=USAGE_LOG_DIR,
+            path_in_repo="logs",
+            every=5,
+            token=token,
+        )
+    except Exception as exc:  # noqa: BLE001 -- logging is best-effort, never block startup
+        print("Failed to set up usage metrics scheduler: %s" % exc)
+        return None
+
+
+def log_usage(input_type, n_atoms, opt_iters, lbcc, success, duration_s, error_type=None):
+    if _usage_scheduler is None:
+        return
+    row = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "input_type": input_type,
+        "n_atoms": n_atoms,
+        "opt_iters": opt_iters,
+        "lbcc": lbcc,
+        "success": success,
+        "error_type": error_type,
+        "duration_s": round(duration_s, 2),
+    }
+    try:
+        # CommitScheduler's own background thread reads this file on its
+        # push interval -- .lock (a plain threading.Lock it exposes for
+        # exactly this) keeps a partial line from ever being read mid-write.
+        with _usage_scheduler.lock:
+            with USAGE_LOG_FILE.open("a") as f:
+                f.write(json.dumps(row) + "\n")
+    except Exception as exc:  # noqa: BLE001 -- usage logging must never break a job
+        print("log_usage: failed to write usage row: %s" % exc)
+
+
+def check_rate_limit(client_ip):
+    """True if this client is still under RATE_LIMIT_MAX submissions in the
+    trailing RATE_LIMIT_WINDOW_S seconds (and records this attempt either
+    way). In-memory sliding window, not persisted -- see RATE_LIMIT_MAX's
+    module-level comment."""
+    now = time.time()
+    with _rate_limit_lock:
+        recent = [t for t in _submission_log[client_ip] if now - t < RATE_LIMIT_WINDOW_S]
+        recent.append(now)
+        _submission_log[client_ip] = recent
+        return len(recent) <= RATE_LIMIT_MAX
+
+
+def _client_ip(request):
+    """Best-effort real client IP behind HF Spaces' reverse proxy -- used
+    only as a rate-limiting key, never logged or stored (see
+    check_rate_limit()/log_usage())."""
+    if request is None:
+        return "unknown"
+    try:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        if request.client and request.client.host:
+            return request.client.host
+    except Exception:  # noqa: BLE001 -- IP extraction is best-effort, never block a submission over it
+        pass
+    return "unknown"
+
+
+def _classify_input(smiles_text, upload_path):
+    if upload_path:
+        if upload_path.lower().endswith(".pdb"):
+            return "pdb+smiles" if smiles_text else "pdb"
+        return "mol"
+    return "smiles"
+
+
+def _run_convert_in_child(kwargs, job_dir, result_queue):
+    os.setsid()  # new process group -- lets the parent kill BOSS's whole
+                 # subprocess tree on timeout, not just this one process.
+    try:
+        os.chdir(job_dir)
+        convert(**kwargs)
+        result_queue.put(("ok", None, None))
+    except ValueError as exc:
+        result_queue.put(("value_error", str(exc), None))
+    except Exception as exc:  # noqa: BLE001 -- serialize any failure back to the parent
+        result_queue.put(("error", str(exc), type(exc).__name__))
+
+
+def run_convert_with_timeout(kwargs, job_dir, timeout_s):
+    """Run LigParGen.Converter.convert() in a child process, killing its
+    whole process group if it doesn't finish within timeout_s.
+
+    convert() ultimately drives BOSS through blocking os.system() calls
+    with no timeout of their own (LigParGen/BOSSReader.py's Get_OPT) -- a
+    pathological input hanging BOSS would otherwise stall this Space's
+    single-worker queue (concurrency_limit=1) for every other visitor
+    indefinitely. Running convert() in its own process (started as its own
+    session/process group via os.setsid() in the child) means a timeout can
+    actually reclaim it: os.killpg() reaches BOSS's csh/xZCM1A/etc.
+    descendants too, not just the immediate Python child, which a plain
+    thread-based timeout could never do (Python threads can't be killed,
+    and terminating just the child process would orphan BOSS's own
+    subprocesses to keep running).
+    """
+    ctx = multiprocessing.get_context("fork")
+    result_queue = ctx.Queue()
+    proc = ctx.Process(target=_run_convert_in_child, args=(kwargs, job_dir, result_queue), daemon=True)
+    proc.start()
+    proc.join(timeout_s)
+
+    if proc.is_alive():
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.join(5)
+        raise gr.Error(
+            "This molecule took longer than %d minutes to process and was stopped -- "
+            "it may be too large or complex for this Space. Try a smaller molecule or "
+            "fewer optimization iterations." % (timeout_s // 60)
+        )
+
+    if result_queue.empty():
+        raise gr.Error(
+            "LigParGen's process exited unexpectedly (exit code %s). Please try again "
+            "or open an issue on GitHub." % proc.exitcode
+        )
+
+    status, msg, exc_type = result_queue.get()
+    if status == "value_error":
+        raise gr.Error(msg)
+    if status == "error":
+        raise gr.Error(
+            "LigParGen failed while processing this molecule (%s). If this keeps "
+            "happening, please open an issue on GitHub." % (exc_type or "unknown error")
+        )
+
+
+def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, request: gr.Request, progress=gr.Progress()):
+    start_time = time.perf_counter()
     smiles_text = (smiles_text or "").strip()
     upload_path = upload_file if upload_file is not None else None
+
+    # Every submission attempt counts toward the rate limit, checked first --
+    # cheapest possible gate, before spending any RDKit/BOSS work on it.
+    if not check_rate_limit(_client_ip(request)):
+        raise gr.Error(
+            "Rate limit reached (%d submissions per %d minutes). Please wait "
+            "before submitting again." % (RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_S // 60)
+        )
 
     if not smiles_text and not upload_path:
         raise gr.Error("Provide a SMILES string (typed or drawn) or upload a PDB/MOL file.")
@@ -102,10 +359,14 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
             "orders/missing Hs) -- submit either SMILES or a MOL file, not both."
         )
 
+    input_type = _classify_input(smiles_text, upload_path)
+
     # Prefer the SMILES for the atom count when both are given: PDB uploads are
     # often missing hydrogens, which would undercount against MAX_ATOMS.
     n_atoms = count_heavy_and_h_atoms(smiles=smiles_text or None, file_path=None if smiles_text else upload_path)
     if n_atoms is not None and n_atoms > MAX_ATOMS:
+        log_usage(input_type, n_atoms, int(opt_iters), None, success=False,
+                  duration_s=time.perf_counter() - start_time, error_type="TooManyAtoms")
         raise gr.Error(f"Molecule has {n_atoms} atoms; maximum allowed is {MAX_ATOMS}.")
 
     lbcc = charge_model == "1.14*CM1A-LBCC (neutral molecules)"
@@ -123,6 +384,15 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
     resname = "".join(random.choices(string.ascii_uppercase, k=3))
     job_dir = tempfile.mkdtemp(prefix="ligpargen_")
 
+    # Trusted SMILES for the 3D preview's bond-order fix (build_preview_sdf) --
+    # separate from kwargs["smiles"], which only LigParGen.Converter.convert()
+    # itself uses (and only for the PDB-upload case, to fix the actual BOSS
+    # input). Typed/drawn SMILES and PDB+SMILES both already have one; a plain
+    # MOL upload already carries correct bond orders of its own, so derive an
+    # equivalent SMILES from it too, rather than leaving the preview to the
+    # geometry-only fallback when a perfectly good source of truth exists.
+    preview_template_smiles = smiles_text or None
+
     kwargs = dict(opt=int(opt_iters), charge=resolved_charge, lbcc=lbcc, resname=resname)
     if upload_path:
         staged = os.path.join(job_dir, os.path.basename(upload_path))
@@ -136,29 +406,49 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
                 kwargs["smiles"] = smiles_text
         else:
             kwargs["mol"] = os.path.basename(staged)
+            if preview_template_smiles is None:
+                mol_for_smiles = Chem.MolFromMolFile(staged, sanitize=False)
+                if mol_for_smiles is not None:
+                    try:
+                        Chem.SanitizeMol(mol_for_smiles)
+                        preview_template_smiles = Chem.MolToSmiles(mol_for_smiles)
+                    except Exception:  # noqa: BLE001 -- preview-only; geometry fallback still applies
+                        pass
     else:
         kwargs["smiles"] = smiles_text
 
     progress(0.1, desc="Running BOSS + LigParGen...")
-    starting_dir = os.getcwd()
     try:
-        os.chdir(job_dir)
-        try:
-            convert(**kwargs)
-        except ValueError as exc:
-            raise gr.Error(str(exc))
-    finally:
-        os.chdir(starting_dir)
+        # Runs convert() in its own killable process group -- see
+        # run_convert_with_timeout()'s docstring for why a plain in-process
+        # call (the prior behavior) can't be safely bounded by a timeout.
+        run_convert_with_timeout(kwargs, job_dir, JOB_TIMEOUT_S)
 
-    zip_path = os.path.join(job_dir, f"{resname}.zip")
-    if not os.path.isfile(zip_path):
-        raise gr.Error("LigParGen did not produce output -- check the molecule is valid.")
+        zip_path = os.path.join(job_dir, f"{resname}.zip")
+        if not os.path.isfile(zip_path):
+            raise gr.Error("LigParGen did not produce output -- check the molecule is valid.")
 
-    preview_pdb_candidates = glob.glob(f"/tmp/{resname}.pdb")
-    preview_pdb = preview_pdb_candidates[0] if preview_pdb_candidates else None
+        preview_pdb_candidates = glob.glob(f"/tmp/{resname}.pdb")
+        preview_pdb = preview_pdb_candidates[0] if preview_pdb_candidates else None
 
+        preview_file = preview_pdb
+        if preview_pdb:
+            preview_sdf = build_preview_sdf(preview_pdb, resname, template_smiles=preview_template_smiles)
+            if preview_sdf:
+                preview_file = preview_sdf
+    except gr.Error as exc:
+        log_usage(input_type, n_atoms, int(opt_iters), lbcc, success=False,
+                  duration_s=time.perf_counter() - start_time, error_type=str(exc))
+        raise
+    except Exception as exc:  # noqa: BLE001 -- never let an unanticipated error surface raw internals
+        log_usage(input_type, n_atoms, int(opt_iters), lbcc, success=False,
+                  duration_s=time.perf_counter() - start_time, error_type=type(exc).__name__)
+        raise gr.Error("An unexpected error occurred. Please try again, or open an issue on GitHub if it persists.")
+
+    log_usage(input_type, n_atoms, int(opt_iters), lbcc, success=True,
+              duration_s=time.perf_counter() - start_time)
     progress(1.0, desc="Done")
-    return zip_path, preview_pdb, f"Done -- {resname}"
+    return zip_path, preview_file, f"Done -- {resname}"
 
 
 KETCHER_HTML = """
@@ -284,6 +574,52 @@ CSS = """
   font-size: 1rem;
   line-height: 1.6;
 }
+.about-panel {
+  max-width: 46rem;
+  margin-top: 0.7rem;
+  border: 1px solid var(--border-color-primary);
+  border-radius: var(--radius-lg);
+  background: var(--background-fill-primary);
+  overflow: hidden;
+}
+.about-panel summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem 1rem;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--body-text-color-subdued);
+  user-select: none;
+}
+.about-panel summary::-webkit-details-marker { display: none; }
+.about-panel summary:hover { color: var(--body-text-color); }
+.about-panel .about-chevron {
+  font-family: ui-sans-serif, sans-serif;
+  font-size: 0.85rem;
+  transition: transform 0.15s ease;
+}
+.about-panel[open] .about-chevron { transform: rotate(180deg); }
+.about-panel .about-body {
+  margin: 0;
+  padding: 0 1.1rem 0.9rem 1.1rem;
+  border-top: 1px solid var(--border-color-primary);
+  padding-top: 0.85rem;
+  color: var(--body-text-color-subdued);
+  font-size: 0.88rem;
+  line-height: 1.65;
+}
+.about-panel .about-body a {
+  color: var(--body-text-color-subdued);
+  text-decoration: underline;
+  text-decoration-color: var(--border-color-primary);
+}
+.about-panel .about-body a:hover { color: var(--primary-600); text-decoration-color: var(--primary-600); }
 .section-label p {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 1.05rem;
@@ -331,6 +667,37 @@ CSS = """
 """
 
 
+# Same "about" text as the original Yale webserver, with the CLI/issues
+# links pointed at this repo instead of the original site's own pages.
+# Collapsed by default (a <details> disclosure, not gr.Markdown) so this
+# secondary text doesn't compete with the hero header or push Step 1 below
+# the fold -- expand on demand instead.
+ABOUT_HTML = """
+<details class="about-panel">
+  <summary>
+    <span>About LigParGen</span>
+    <span class="about-chevron">&#9662;</span>
+  </summary>
+  <p class="about-body">
+    LigParGen is a web-based service that provides force field (FF)
+    parameters for organic molecules or ligands, offered by the Jorgensen
+    group. LigParGen provides bond, angle, dihedral, and Lennard-Jones
+    OPLS-AA parameters with 1.14*CM1A or 1.14*CM1A-LBCC partial atomic
+    charges. Server provides parameter and topology files for commonly
+    used molecular dynamics and Monte Carlo packages OpenMM, Gromacs,
+    NAMD, CHARMM, LAMMPS, TINKER, CNS/X-PLOR, Q, DESMOND, BOSS and MCPRO.
+    Also, the PQR file is generated. Supported input formats: SMILES, MOL
+    and PDB. Maximum ligand size allowed is 200 atoms. Check
+    <a href="https://github.com/leelasd/LigParGen_2.3" target="_blank" rel="noopener">this link</a>
+    to use LigParGen software from command-line in your local computer.
+    Please, report any issue on the
+    <a href="https://github.com/leelasd/LigParGen_2.3/issues" target="_blank" rel="noopener">LigParGen issues</a>
+    page.
+  </p>
+</details>
+"""
+
+
 # Same citations as the CLI's own --help text (LigParGen/Converter.py) plus
 # the core OPLS-AA potential paper, reproduced here for the web UI in place
 # of the original webserver's References section.
@@ -362,6 +729,7 @@ def build_ui():
             "OPLS-AA/CM1A force-field parameter generator for organic ligands.",
             elem_classes="app-subtitle",
         )
+        gr.HTML(ABOUT_HTML)
 
         with gr.Row():
             with gr.Column():
@@ -424,4 +792,5 @@ def build_ui():
 if __name__ == "__main__":
     fetch_boss()
     os.environ["BOSSdir"] = BOSS_DIR
+    _usage_scheduler = setup_usage_scheduler()
     build_ui().launch(server_name="0.0.0.0", server_port=7860)
