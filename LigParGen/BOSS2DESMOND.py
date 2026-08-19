@@ -399,7 +399,7 @@ f_m_ct {
 
 
 def mainBOSS2DESMOND(resid, clu):
-    mol = pickle.load(open(resid + ".p", "rb"))
+    mol = pickle.load(open(resid + ".pkl", "rb"))
     if clu:
         pdb_file = 'clu.pdb'
     else:

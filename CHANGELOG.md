@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **The per-molecule pickle handoff is now `.pkl`, not `.p`.** `convert()`
+  pickles the parsed `BOSSReader` object (all OPLS-AA/CM1A parameters --
+  atom types, charges, bonds, angles, torsions, and the BOSS-optimized XYZ
+  coordinates -- already lived in `mol.MolData['XYZ']`) so each `BOSS2*.py`
+  format writer can independently reload it; only the file extension
+  changed, to the conventional `.pkl`. It's still bundled into the results
+  zip alongside the other output formats.
 - **PDB input can now be paired with a SMILES to fix bond orders.** PDB files
   carry no bond-order information and are often missing hydrogens; supplying
   `-s`/`--smiles` alongside `-p`/`--pdb` uses RDKit's

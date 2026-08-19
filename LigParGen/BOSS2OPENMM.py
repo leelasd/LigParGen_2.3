@@ -252,7 +252,7 @@ def boss2opm(resid, molecule_data, pdb_file):
 
 
 def mainBOSS2OPM(resid, clu):
-    mol = pickle.load(open(resid + ".p", "rb"))
+    mol = pickle.load(open(resid + ".pkl", "rb"))
     if clu:
         pdb_file = '/tmp/clu.pdb'
     else:

@@ -286,7 +286,7 @@ def boss2gmx(resid, molecule_data, pdb_file):
 
 
 def mainBOSS2GMX(resid, clu):
-    mol = pickle.load(open(resid + ".p", "rb"))
+    mol = pickle.load(open(resid + ".pkl", "rb"))
     if clu:
         pdb_file = 'clu.pdb'
     else:

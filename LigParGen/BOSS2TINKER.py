@@ -392,7 +392,7 @@ def create_xyz_file(residue_name,mol):
 
 
 def mainBOSS2TINKER(resid, clu=False):
-    mol = pickle.load(open(resid + ".p", "rb"))
+    mol = pickle.load(open(resid + ".pkl", "rb"))
     # if clu:
     #     pdb_file = '/tmp/clu.pdb'
     # else:

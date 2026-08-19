@@ -222,7 +222,7 @@ def convert(**kwargs):
     assert(CheckForHs(mol.MolData['ATOMS'])
            ), "Hydrogens are not added. Please add Hydrogens"
 
-    pickle.dump(mol, open(resname + ".p", "wb"))
+    pickle.dump(mol, open(resname + ".pkl", "wb"))
     mainBOSS2OPM(resname, clu)
     print('DONE WITH OPENMM')
     mainBOSS2Q(resname, clu)
@@ -243,7 +243,7 @@ def convert(**kwargs):
         for f in glob.glob('/tmp/%s.*'%resname):
             zipObj2.write(f,os.path.basename(f))
     zipObj2.close()
-    os.remove(resname + ".p")
+    os.remove(resname + ".pkl")
     mol.cleanup()
     os.chdir(starting_dir)
     print('DONE WITH ALL \n Back to %s'%starting_dir)

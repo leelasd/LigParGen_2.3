@@ -216,6 +216,6 @@ def Boss2Charmm(resid, molecule_data):
 
 
 def mainBOSS2Q(resid, clu=False):
-    mol = pickle.load(open(resid + ".p", "rb"))
+    mol = pickle.load(open(resid + ".pkl", "rb"))
     Boss2Charmm(resid, mol)
     return None
