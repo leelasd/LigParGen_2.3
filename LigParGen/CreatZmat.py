@@ -115,20 +115,38 @@ def make_graphs(atoms, coos, bonds):
     for (i, j, rij) in zip(bonds['BI'], bonds['BJ'], bonds['RIJ']):
         G.add_edge(i, j, distance=rij)
         G.add_edge(j, i, distance=rij)
-    all_ps = dict(nx.algorithms.all_pairs_shortest_path_length(G))
-    all_paths = []
-    for s in all_ps.keys():
-        for e in all_ps[s].keys():
-#            if   all_ps[s][e] == 1: all_paths+=list(nx.algorithms.shortest_simple_paths(G,s,e)) 
-#            elif all_ps[s][e] == 2: all_paths+=list(nx.algorithms.shortest_simple_paths(G,s,e)) 
-#            elif all_ps[s][e] == 3: all_paths+=list(nx.algorithms.shortest_simple_paths(G,s,e)) 
-            if   all_ps[s][e] == 1: all_paths+=list(nx.algorithms.all_simple_paths(G,s,e,cutoff=1))
-            elif all_ps[s][e] == 2: all_paths+=list(nx.algorithms.all_simple_paths(G,s,e,cutoff=2))
-            elif all_ps[s][e] == 3: all_paths+=list(nx.algorithms.all_simple_paths(G,s,e,cutoff=3))
-
-    all_bonds = [p for p in all_paths if len(set(p))==2]
-    new_angs =  [p for p in all_paths if len(set(p))==3]
-    new_tors =  [p for p in all_paths if len(set(p))==4]
+    # Enumerate bonds/angles/torsions by walking direct neighbors of each
+    # node/edge instead of the previous all_pairs_shortest_path_length +
+    # all_simple_paths(cutoff=1/2/3) approach. That O(N^2) pair-enumeration
+    # also had a latent correctness gap on small rings (3-/4-/5-membered):
+    # classifying a triple/quadruple by the graph-wide shortest-path
+    # distance between its endpoints silently dropped angles/torsions
+    # whenever a shortcut existed around the other side of the ring (e.g.
+    # a bare 3-membered ring produced zero angles, since every pair of
+    # atoms in a triangle is mutually 1 bond apart). Walking directly from
+    # each node's (for angles) or each edge's (for torsions) neighbors,
+    # exactly as expand_zmat.py's validated _complete_internals() does,
+    # sidesteps that: it enumerates every angle/torsion that is actually
+    # implied by the local connectivity, independent of shortcuts
+    # elsewhere in the graph.
+    all_bonds = [list(e) for e in G.edges()]
+    new_angs = []
+    for j in G.nodes():
+        neigh = list(G.neighbors(j))
+        for a in range(len(neigh)):
+            for b in range(len(neigh)):
+                if a == b:
+                    continue
+                new_angs.append([neigh[a], j, neigh[b]])
+    new_tors = []
+    for j, k in G.edges():
+        for i in G.neighbors(j):
+            if i == k:
+                continue
+            for l in G.neighbors(k):
+                if l == j or l == i:
+                    continue
+                new_tors.append([i, j, k, l])
     dict_new_tors = {tor_id(t): t for t in new_tors}
     dict_new_angs = {ang_id(t): t for t in new_angs}
     imp_keys = [n for n in G.nodes() if G.degree(n) / 2 == 3]
