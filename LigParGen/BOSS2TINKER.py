@@ -14,7 +14,8 @@ argparse
 numpy
 """
 
-from LigParGen.BOSSReader import bossPdbAtom2Element,bossElement2Mass,ucomb,tor_cent
+from LigParGen.BOSSReader import ucomb,tor_cent
+from LigParGen.boss_common import bossData, pair_declared_torsions
 import pickle
 import os
 import pandas as pd
@@ -41,28 +42,8 @@ ATOM_NUMBER_DICT = {'H': 1, 'He': 2, 'Li': 3, 'Be': 4,
                                      'Po': 84, 'At': 85, 'Rn': 86, 'Fr': 87, 
                                      'Ra': 88, 'Ac': 89}
 
-def bossData(molecule_data):
-    ats_file = molecule_data.MolData['ATOMS']
-    types = []
-    for i in enumerate(ats_file):
-        types.append([i[1].split()[1], 'opls_' + i[1].split()[2]])
-    st_no = 3
-    Qs = molecule_data.MolData['Q_LJ']
-    assert len(Qs) == len(types), 'Please check the at_info and Q_LJ_dat files'
-    num2opls = {}
-    for i in range(0, len(types)):
-        num2opls[i] = Qs[i][0]
-    num2typ2symb = {i: types[i] for i in range(len(Qs))}
-    for i in range(len(Qs)):
-        num2typ2symb[i].append(bossPdbAtom2Element(
-            num2typ2symb[i][0]) + num2typ2symb[i][1][-3:])
-        num2typ2symb[i].append(bossPdbAtom2Element(num2typ2symb[i][0]))
-        num2typ2symb[i].append(bossElement2Mass(num2typ2symb[i][3]))
-        num2typ2symb[i].append(Qs[i][0])
-    return (types, Qs, num2opls, st_no, num2typ2symb)
-
 def Boss2Tinker(resid, molecule_data, xyz_dict):
-    types, Qs, num2opls, st_no, num2typ2symb = bossData(molecule_data)
+    types, Qs, num2opls, st_no, num2typ2symb, num2pqrtype = bossData(molecule_data)
     bnd_df = boss2CharmmBond(molecule_data, st_no)
     bndlist = list(bnd_df.UR) + (list(bnd_df.UR))
     ang_df = boss2CharmmAngle(molecule_data.MolData['ANGLES'], num2opls, st_no,num2typ2symb)
@@ -108,9 +89,18 @@ dielectric              1.0
     dict_counter = 1
     for type_list in types:
         type_num = int(type_list[1].strip('_opls'))
+        # Fixed positions, not negative indices: `types[i]` is the same
+        # list object bossData() appends num2typ2symb's fields onto (name,
+        # opls_type, class, elem, mass, Qs[i][0]) AND num2pqrtype's later
+        # appends its own two extra fields (charge, sigma) onto that same
+        # shared object -- so by the time this loop runs, each row has 8
+        # entries, not 6, and negative indices like [-3]/[-2]/[-1] would
+        # silently pick up num2pqrtype's trailing fields (e.g. an atom
+        # class label as the "element" ATOM_NUMBER_DICT is keyed on)
+        # instead of the intended elem/mass/Qs[i][0] columns.
         prm.write('atom %10d %4d %5s %8s %10d %10.3f %5d \n' %
-            (type_num, type_num, type_list[-1], '"' + type_list[0] + '"', 
-                ATOM_NUMBER_DICT[type_list[-3]], type_list[-2], xyz_dict[dict_counter][2]))
+            (type_num, type_num, type_list[5], '"' + type_list[0] + '"',
+                ATOM_NUMBER_DICT[type_list[3]], type_list[4], xyz_dict[dict_counter][2]))
         dict_counter += 1
     prm.write(
 '''
@@ -307,14 +297,6 @@ def boss2CharmmAngle(anglefile, num2opls, st_no,num2typ2symb):
 
 def Boss2CharmmTorsion(bnd_df, num2opls, st_no, molecule_data, num2typ2symb):
     #    print num2opls
-    dhd = []
-    for line in molecule_data.MolData['TORSIONS']:
-        dt = [float(l) for l in line]
-        dhd.append(dt)
-    dhd = np.array(dhd)
-    dhd = dhd  # kcal to kj conversion
-    dhd = dhd / 2.0  # Komm = Vopls/2
-    dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
     ats = []
     for line in molecule_data.MolData['ATOMS'][3:]:
         dt = [line.split()[0], line.split()[4],
@@ -324,9 +306,14 @@ def Boss2CharmmTorsion(bnd_df, num2opls, st_no, molecule_data, num2typ2symb):
     for line in molecule_data.MolData['ADD_DIHED']:
         dt = [int(l) for l in line]
         ats.append(dt)
-    assert len(ats) == len(
-        dhd), 'Number of Dihedral angles in Zmatrix and Out file dont match'
-    ats = np.array(ats) - st_no
+
+    paired_ats, paired_dhd = pair_declared_torsions(molecule_data, ats)
+
+    dhd = np.array(paired_dhd)
+    dhd = dhd  # kcal to kj conversion
+    dhd = dhd / 2.0  # Komm = Vopls/2
+    dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
+    ats = np.array(paired_ats) - st_no
     for i in range(len(ats)):
         for j in range(len(ats[0])):
             if ats[i][j] < 0:
