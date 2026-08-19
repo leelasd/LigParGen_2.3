@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **PDB input can now be paired with a SMILES to fix bond orders.** PDB files
+  carry no bond-order information and are often missing hydrogens; supplying
+  `-s`/`--smiles` alongside `-p`/`--pdb` uses RDKit's
+  `AssignBondOrdersFromTemplate` to recover the correct connectivity and bond
+  orders from the SMILES (kept as the 3D coordinates from the PDB), then adds
+  any missing hydrogens with RDKit-estimated positions. Mismatches between the
+  SMILES and the PDB's heavy-atom connectivity raise a clear error instead of
+  silently producing a wrong structure. See `LigParGen/mol_boss.py`'s
+  `convert_pdb2mol_with_smiles`. The Hugging Face Space's PDB upload path now
+  also accepts an optional accompanying SMILES for the same purpose.
+
 ## 3.0
 
 Breaking release: drops Python 2 support, drops the MCPRO dependency, and

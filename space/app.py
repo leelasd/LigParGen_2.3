@@ -96,10 +96,15 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
 
     if not smiles_text and not upload_path:
         raise gr.Error("Provide a SMILES string (typed or drawn) or upload a PDB/MOL file.")
-    if smiles_text and upload_path:
-        raise gr.Error("Submit either SMILES or a PDB/MOL file, not both.")
+    if smiles_text and upload_path and not upload_path.lower().endswith(".pdb"):
+        raise gr.Error(
+            "SMILES + upload is only supported for PDB uploads (used to fix bond "
+            "orders/missing Hs) -- submit either SMILES or a MOL file, not both."
+        )
 
-    n_atoms = count_heavy_and_h_atoms(smiles=smiles_text or None, file_path=upload_path)
+    # Prefer the SMILES for the atom count when both are given: PDB uploads are
+    # often missing hydrogens, which would undercount against MAX_ATOMS.
+    n_atoms = count_heavy_and_h_atoms(smiles=smiles_text or None, file_path=None if smiles_text else upload_path)
     if n_atoms is not None and n_atoms > MAX_ATOMS:
         raise gr.Error(f"Molecule has {n_atoms} atoms; maximum allowed is {MAX_ATOMS}.")
 
@@ -124,6 +129,11 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
         shutil.copyfile(upload_path, staged)
         if upload_path.lower().endswith(".pdb"):
             kwargs["pdb"] = os.path.basename(staged)
+            # A SMILES supplied alongside the PDB is used as a trusted template
+            # to fix connectivity/bond orders/missing Hs -- see
+            # LigParGen.mol_boss.convert_pdb2mol_with_smiles.
+            if smiles_text:
+                kwargs["smiles"] = smiles_text
         else:
             kwargs["mol"] = os.path.basename(staged)
     else:
@@ -133,7 +143,10 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
     starting_dir = os.getcwd()
     try:
         os.chdir(job_dir)
-        convert(**kwargs)
+        try:
+            convert(**kwargs)
+        except ValueError as exc:
+            raise gr.Error(str(exc))
     finally:
         os.chdir(starting_dir)
 
@@ -216,7 +229,13 @@ def build_ui():
                 gr.Markdown("**Or draw a structure:**")
                 ketcher_html = gr.HTML(KETCHER_HTML)
 
-                gr.Markdown("**Or upload a MOL/PDB file** (must include all hydrogens):")
+                gr.Markdown(
+                    "**Or upload a MOL/PDB file:** MOL files must include all "
+                    "hydrogens. For a PDB upload, also supply the SMILES above "
+                    "-- it's used to fix bond orders and add any missing "
+                    "hydrogens (PDB files don't encode bond order and are "
+                    "often missing Hs)."
+                )
                 upload = gr.File(label="MOL or PDB file", file_types=[".mol", ".pdb"])
 
                 gr.Markdown("### Step 2: Options")

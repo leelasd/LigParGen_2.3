@@ -15,7 +15,7 @@ from LigParGen.BOSS2DESMOND import mainBOSS2DESMOND
 from LigParGen.BOSS2TINKER import mainBOSS2TINKER 
 from LigParGen.CreatZmat import GenMolRep
 from LigParGen.Orca2CM5charges import LoadModel, GetLogFile, HirshfeldToCM5,AddCM5Charges
-from LigParGen.mol_boss import convert_pdb2mol
+from LigParGen.mol_boss import convert_pdb2mol, convert_pdb2mol_with_smiles
 from LigParGen.fepzmat import CM5_file2zmat
 import argparse
 import pickle
@@ -60,9 +60,12 @@ def main():
     if using PDB file 
     Usage: -p phenol.pdb    -r PHN -c 0 -o 0
     
-    if using BOSS SMILES CODE 
-    Usage: -s 'c1ccc(cc1)O' -r PHN -c 0 -o 0  
-    
+    if using BOSS SMILES CODE
+    Usage: -s 'c1ccc(cc1)O' -r PHN -c 0 -o 0
+
+    if using PDB file with a trusted SMILES to fix bond orders/missing Hs
+    Usage: -p phenol.pdb -s 'c1ccc(cc1)O' -r PHN -c 0 -o 0
+
     REQUIREMENTS:
     BOSS (need to set BOSSdir in bashrc and cshrc)
     Preferably Anaconda python with following modules
@@ -166,7 +169,14 @@ def convert(**kwargs):
         os.system('cp inp_orca.pdb /tmp/%s.pdb' %resname)
         pdb = '%s.pdb'%resname
 
-    if smiles != None:
+    if smiles != None and pdb != None:
+        pdb_file_path = os.path.basename(pdb)
+        shutil.copyfile(pdb_file_path,'/tmp/%s'%pdb)
+        os.chdir('/tmp/')
+        mol_file = convert_pdb2mol_with_smiles(pdb, smiles)
+        GenMolRep(mol_file, optim, resname, charge)
+        mol = BOSSReader('%s.z' % resname, optim, charge, lbcc)
+    elif smiles != None:
         os.chdir('/tmp/')
         smifile = open('%s.smi' % resname, 'w+')
         smifile.write('%s' % smiles)
