@@ -42,7 +42,7 @@ BOSS_REPO = os.environ.get("BOSS_ASSET_REPO", "lsdodda/ligpargen-boss-assets")
 # A single BOSS run blocking the (concurrency_limit=1) queue indefinitely on
 # a pathological input would stall every other visitor's job behind it --
 # see run_convert_with_timeout().
-JOB_TIMEOUT_S = int(os.environ.get("JOB_TIMEOUT_S", "600"))
+JOB_TIMEOUT_S = int(os.environ.get("JOB_TIMEOUT_S", "60"))
 
 # Basic per-client submission cap -- see check_rate_limit(). In-memory only
 # (resets on restart/redeploy): acceptable for a single-worker Space with no
