@@ -637,28 +637,23 @@ CSS = """
 
 # Same "about" text as the original Yale webserver, with the CLI/issues
 # links pointed at this repo instead of the original site's own pages.
-ABOUT_MD = """
-LigParGen is a web-based service that provides force field (FF) parameters
-for organic molecules or ligands, offered by the Jorgensen group.
-
-LigParGen provides bond, angle, dihedral, and Lennard-Jones OPLS-AA
-parameters with 1.14\\*CM1A or 1.14\\*CM1A-LBCC partial atomic charges.
-
-Server provides parameter and topology files for commonly used molecular
-dynamics and Monte Carlo packages OpenMM, Gromacs, NAMD, CHARMM, LAMMPS,
-TINKER, CNS/X-PLOR, Q, DESMOND, BOSS and MCPRO. Also, the PQR file is
-generated.
-
-Supported input formats: SMILES, MOL and PDB.
-
-Maximum ligand size allowed is 200 atoms.
-
-Check [this link](https://github.com/leelasd/LigParGen_2.3) to use
-LigParGen software from command-line in your local computer.
-
-Please, report any issue on the
-[LigParGen issues](https://github.com/leelasd/LigParGen_2.3/issues) page.
-"""
+ABOUT_MD = (
+    "LigParGen is a web-based service that provides force field (FF) "
+    "parameters for organic molecules or ligands, offered by the "
+    "Jorgensen group. LigParGen provides bond, angle, dihedral, and "
+    "Lennard-Jones OPLS-AA parameters with 1.14\\*CM1A or "
+    "1.14\\*CM1A-LBCC partial atomic charges. Server provides parameter "
+    "and topology files for commonly used molecular dynamics and Monte "
+    "Carlo packages OpenMM, Gromacs, NAMD, CHARMM, LAMMPS, TINKER, "
+    "CNS/X-PLOR, Q, DESMOND, BOSS and MCPRO. Also, the PQR file is "
+    "generated. Supported input formats: SMILES, MOL and PDB. Maximum "
+    "ligand size allowed is 200 atoms. Check "
+    "[this link](https://github.com/leelasd/LigParGen_2.3) to use "
+    "LigParGen software from command-line in your local computer. "
+    "Please, report any issue on the "
+    "[LigParGen issues](https://github.com/leelasd/LigParGen_2.3/issues) "
+    "page."
+)
 
 
 # Same citations as the CLI's own --help text (LigParGen/Converter.py) plus
