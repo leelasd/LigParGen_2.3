@@ -44,7 +44,7 @@ A Hugging Face Space — the hosted app unit (git repo, build, and running app t
 _Avoid_: "the app" alone — ambiguous with the LigParGen CLI/package itself
 
 **Space visibility**:
-One of three Hugging Face-defined access levels for a Space: **Public** (source, running app, and built image all fully open), **Protected** (source and image private to owner/collaborators, but the running app is still publicly reachable), **Private** (source, running app, and built image all restricted to owner/collaborators — 404s for anyone else, not listed in search). This project's Space starts at Private.
+One of three Hugging Face-defined access levels for a Space: **Public** (source, running app, and built image all fully open), **Protected** (source and image private to owner/collaborators, but the running app is still publicly reachable), **Private** (source, running app, and built image all restricted to owner/collaborators — 404s for anyone else, not listed in search). This project's Space started at Private for initial development and testing, then switched to Public (see ADR-0004) once the job-timeout/rate-limit/usage-metrics hardening was in place — live at https://huggingface.co/spaces/lsdodda/ligpargen.
 
 **BOSS asset store**:
 The private Hugging Face Dataset repository holding a copy of the licensed BOSS install, fetched into the Space's container at startup using a Secret token. Never committed to this git repo, never baked into any Docker image layer — the hosted-deployment counterpart to ADR-0001's local-build-time rule.
