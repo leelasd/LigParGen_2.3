@@ -11,16 +11,24 @@ BOSS is fetched into this container at startup from a private HF Dataset
 repo (see docs/adr/0003 in the main repo) -- never committed here, never
 baked into the image.
 """
+import collections
 import glob
+import json
+import multiprocessing
 import os
 import random
 import shutil
+import signal
 import string
 import tempfile
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 import gradio as gr
 from gradio_molecule3d import Molecule3D
-from huggingface_hub import snapshot_download
+from huggingface_hub import CommitScheduler, snapshot_download
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDetermineBonds
 from rdkit.Geometry import Point3D
@@ -30,6 +38,27 @@ from LigParGen.Converter import convert
 MAX_ATOMS = 200
 BOSS_DIR = "/home/user/boss"
 BOSS_REPO = os.environ.get("BOSS_ASSET_REPO", "lsdodda/ligpargen-boss-assets")
+
+# A single BOSS run blocking the (concurrency_limit=1) queue indefinitely on
+# a pathological input would stall every other visitor's job behind it --
+# see run_convert_with_timeout().
+JOB_TIMEOUT_S = int(os.environ.get("JOB_TIMEOUT_S", "600"))
+
+# Basic per-client submission cap -- see check_rate_limit(). In-memory only
+# (resets on restart/redeploy): acceptable for a single-worker Space with no
+# other persistent state, and avoids standing up external infra for v1.
+RATE_LIMIT_MAX = int(os.environ.get("RATE_LIMIT_MAX", "5"))
+RATE_LIMIT_WINDOW_S = int(os.environ.get("RATE_LIMIT_WINDOW_S", "600"))
+_rate_limit_lock = threading.Lock()
+_submission_log = collections.defaultdict(list)
+
+# Anonymous usage metrics -- job counts/sizes/outcomes only, never the
+# submitted structure itself or any request/session identifier -- pushed
+# periodically to a private HF Dataset. See setup_usage_scheduler().
+USAGE_REPO = os.environ.get("USAGE_METRICS_REPO", "lsdodda/ligpargen-usage-metrics")
+USAGE_LOG_DIR = Path("/tmp/usage_logs")
+USAGE_LOG_FILE = USAGE_LOG_DIR / "usage.jsonl"
+_usage_scheduler = None
 
 
 def fetch_boss():
@@ -156,9 +185,171 @@ def build_preview_sdf(pdb_path, resname, template_smiles=None):
         return None
 
 
-def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, progress=gr.Progress()):
+def setup_usage_scheduler():
+    """Set up anonymous usage-metrics logging (job counts/sizes/outcomes,
+    never the submitted structure or any request/session identifier) via a
+    CommitScheduler pushing to a private HF Dataset -- the same
+    runtime-fetch/private-repo pattern already used for the BOSS asset
+    store (docs/adr/0003). Returns None (and log_usage() becomes a no-op)
+    if HF_TOKEN isn't set or the scheduler fails to start, so a
+    misconfigured or rate-limited token disables logging rather than
+    blocking the app from serving conversions at all -- usage tracking is
+    a nice-to-have, not a hard dependency for the app's actual job."""
+    token = os.environ.get("HF_TOKEN")
+    if not token:
+        print("HF_TOKEN not set -- usage metrics logging disabled.")
+        return None
+    try:
+        return CommitScheduler(
+            repo_id=USAGE_REPO,
+            repo_type="dataset",
+            folder_path=USAGE_LOG_DIR,
+            path_in_repo="logs",
+            every=5,
+            token=token,
+        )
+    except Exception as exc:  # noqa: BLE001 -- logging is best-effort, never block startup
+        print("Failed to set up usage metrics scheduler: %s" % exc)
+        return None
+
+
+def log_usage(input_type, n_atoms, opt_iters, lbcc, success, duration_s, error_type=None):
+    if _usage_scheduler is None:
+        return
+    row = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "input_type": input_type,
+        "n_atoms": n_atoms,
+        "opt_iters": opt_iters,
+        "lbcc": lbcc,
+        "success": success,
+        "error_type": error_type,
+        "duration_s": round(duration_s, 2),
+    }
+    try:
+        # CommitScheduler's own background thread reads this file on its
+        # push interval -- .lock (a plain threading.Lock it exposes for
+        # exactly this) keeps a partial line from ever being read mid-write.
+        with _usage_scheduler.lock:
+            with USAGE_LOG_FILE.open("a") as f:
+                f.write(json.dumps(row) + "\n")
+    except Exception as exc:  # noqa: BLE001 -- usage logging must never break a job
+        print("log_usage: failed to write usage row: %s" % exc)
+
+
+def check_rate_limit(client_ip):
+    """True if this client is still under RATE_LIMIT_MAX submissions in the
+    trailing RATE_LIMIT_WINDOW_S seconds (and records this attempt either
+    way). In-memory sliding window, not persisted -- see RATE_LIMIT_MAX's
+    module-level comment."""
+    now = time.time()
+    with _rate_limit_lock:
+        recent = [t for t in _submission_log[client_ip] if now - t < RATE_LIMIT_WINDOW_S]
+        recent.append(now)
+        _submission_log[client_ip] = recent
+        return len(recent) <= RATE_LIMIT_MAX
+
+
+def _client_ip(request):
+    """Best-effort real client IP behind HF Spaces' reverse proxy -- used
+    only as a rate-limiting key, never logged or stored (see
+    check_rate_limit()/log_usage())."""
+    if request is None:
+        return "unknown"
+    try:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        if request.client and request.client.host:
+            return request.client.host
+    except Exception:  # noqa: BLE001 -- IP extraction is best-effort, never block a submission over it
+        pass
+    return "unknown"
+
+
+def _classify_input(smiles_text, upload_path):
+    if upload_path:
+        if upload_path.lower().endswith(".pdb"):
+            return "pdb+smiles" if smiles_text else "pdb"
+        return "mol"
+    return "smiles"
+
+
+def _run_convert_in_child(kwargs, job_dir, result_queue):
+    os.setsid()  # new process group -- lets the parent kill BOSS's whole
+                 # subprocess tree on timeout, not just this one process.
+    try:
+        os.chdir(job_dir)
+        convert(**kwargs)
+        result_queue.put(("ok", None, None))
+    except ValueError as exc:
+        result_queue.put(("value_error", str(exc), None))
+    except Exception as exc:  # noqa: BLE001 -- serialize any failure back to the parent
+        result_queue.put(("error", str(exc), type(exc).__name__))
+
+
+def run_convert_with_timeout(kwargs, job_dir, timeout_s):
+    """Run LigParGen.Converter.convert() in a child process, killing its
+    whole process group if it doesn't finish within timeout_s.
+
+    convert() ultimately drives BOSS through blocking os.system() calls
+    with no timeout of their own (LigParGen/BOSSReader.py's Get_OPT) -- a
+    pathological input hanging BOSS would otherwise stall this Space's
+    single-worker queue (concurrency_limit=1) for every other visitor
+    indefinitely. Running convert() in its own process (started as its own
+    session/process group via os.setsid() in the child) means a timeout can
+    actually reclaim it: os.killpg() reaches BOSS's csh/xZCM1A/etc.
+    descendants too, not just the immediate Python child, which a plain
+    thread-based timeout could never do (Python threads can't be killed,
+    and terminating just the child process would orphan BOSS's own
+    subprocesses to keep running).
+    """
+    ctx = multiprocessing.get_context("fork")
+    result_queue = ctx.Queue()
+    proc = ctx.Process(target=_run_convert_in_child, args=(kwargs, job_dir, result_queue), daemon=True)
+    proc.start()
+    proc.join(timeout_s)
+
+    if proc.is_alive():
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.join(5)
+        raise gr.Error(
+            "This molecule took longer than %d minutes to process and was stopped -- "
+            "it may be too large or complex for this Space. Try a smaller molecule or "
+            "fewer optimization iterations." % (timeout_s // 60)
+        )
+
+    if result_queue.empty():
+        raise gr.Error(
+            "LigParGen's process exited unexpectedly (exit code %s). Please try again "
+            "or open an issue on GitHub." % proc.exitcode
+        )
+
+    status, msg, exc_type = result_queue.get()
+    if status == "value_error":
+        raise gr.Error(msg)
+    if status == "error":
+        raise gr.Error(
+            "LigParGen failed while processing this molecule (%s). If this keeps "
+            "happening, please open an issue on GitHub." % (exc_type or "unknown error")
+        )
+
+
+def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, request: gr.Request, progress=gr.Progress()):
+    start_time = time.perf_counter()
     smiles_text = (smiles_text or "").strip()
     upload_path = upload_file if upload_file is not None else None
+
+    # Every submission attempt counts toward the rate limit, checked first --
+    # cheapest possible gate, before spending any RDKit/BOSS work on it.
+    if not check_rate_limit(_client_ip(request)):
+        raise gr.Error(
+            "Rate limit reached (%d submissions per %d minutes). Please wait "
+            "before submitting again." % (RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_S // 60)
+        )
 
     if not smiles_text and not upload_path:
         raise gr.Error("Provide a SMILES string (typed or drawn) or upload a PDB/MOL file.")
@@ -168,10 +359,14 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
             "orders/missing Hs) -- submit either SMILES or a MOL file, not both."
         )
 
+    input_type = _classify_input(smiles_text, upload_path)
+
     # Prefer the SMILES for the atom count when both are given: PDB uploads are
     # often missing hydrogens, which would undercount against MAX_ATOMS.
     n_atoms = count_heavy_and_h_atoms(smiles=smiles_text or None, file_path=None if smiles_text else upload_path)
     if n_atoms is not None and n_atoms > MAX_ATOMS:
+        log_usage(input_type, n_atoms, int(opt_iters), None, success=False,
+                  duration_s=time.perf_counter() - start_time, error_type="TooManyAtoms")
         raise gr.Error(f"Molecule has {n_atoms} atoms; maximum allowed is {MAX_ATOMS}.")
 
     lbcc = charge_model == "1.14*CM1A-LBCC (neutral molecules)"
@@ -223,29 +418,35 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
         kwargs["smiles"] = smiles_text
 
     progress(0.1, desc="Running BOSS + LigParGen...")
-    starting_dir = os.getcwd()
     try:
-        os.chdir(job_dir)
-        try:
-            convert(**kwargs)
-        except ValueError as exc:
-            raise gr.Error(str(exc))
-    finally:
-        os.chdir(starting_dir)
+        # Runs convert() in its own killable process group -- see
+        # run_convert_with_timeout()'s docstring for why a plain in-process
+        # call (the prior behavior) can't be safely bounded by a timeout.
+        run_convert_with_timeout(kwargs, job_dir, JOB_TIMEOUT_S)
 
-    zip_path = os.path.join(job_dir, f"{resname}.zip")
-    if not os.path.isfile(zip_path):
-        raise gr.Error("LigParGen did not produce output -- check the molecule is valid.")
+        zip_path = os.path.join(job_dir, f"{resname}.zip")
+        if not os.path.isfile(zip_path):
+            raise gr.Error("LigParGen did not produce output -- check the molecule is valid.")
 
-    preview_pdb_candidates = glob.glob(f"/tmp/{resname}.pdb")
-    preview_pdb = preview_pdb_candidates[0] if preview_pdb_candidates else None
+        preview_pdb_candidates = glob.glob(f"/tmp/{resname}.pdb")
+        preview_pdb = preview_pdb_candidates[0] if preview_pdb_candidates else None
 
-    preview_file = preview_pdb
-    if preview_pdb:
-        preview_sdf = build_preview_sdf(preview_pdb, resname, template_smiles=preview_template_smiles)
-        if preview_sdf:
-            preview_file = preview_sdf
+        preview_file = preview_pdb
+        if preview_pdb:
+            preview_sdf = build_preview_sdf(preview_pdb, resname, template_smiles=preview_template_smiles)
+            if preview_sdf:
+                preview_file = preview_sdf
+    except gr.Error as exc:
+        log_usage(input_type, n_atoms, int(opt_iters), lbcc, success=False,
+                  duration_s=time.perf_counter() - start_time, error_type=str(exc))
+        raise
+    except Exception as exc:  # noqa: BLE001 -- never let an unanticipated error surface raw internals
+        log_usage(input_type, n_atoms, int(opt_iters), lbcc, success=False,
+                  duration_s=time.perf_counter() - start_time, error_type=type(exc).__name__)
+        raise gr.Error("An unexpected error occurred. Please try again, or open an issue on GitHub if it persists.")
 
+    log_usage(input_type, n_atoms, int(opt_iters), lbcc, success=True,
+              duration_s=time.perf_counter() - start_time)
     progress(1.0, desc="Done")
     return zip_path, preview_file, f"Done -- {resname}"
 
@@ -513,4 +714,5 @@ def build_ui():
 if __name__ == "__main__":
     fetch_boss()
     os.environ["BOSSdir"] = BOSS_DIR
+    _usage_scheduler = setup_usage_scheduler()
     build_ui().launch(server_name="0.0.0.0", server_port=7860)
