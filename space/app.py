@@ -574,20 +574,52 @@ CSS = """
   font-size: 1rem;
   line-height: 1.6;
 }
-.app-about { max-width: 46rem; margin-top: 0.35rem; }
-.app-about p {
-  color: var(--body-text-color-subdued);
-  font-size: 0.9rem;
-  line-height: 1.6;
-  margin-bottom: 0.6rem;
+.about-panel {
+  max-width: 46rem;
+  margin-top: 0.7rem;
+  border: 1px solid var(--border-color-primary);
+  border-radius: var(--radius-lg);
+  background: var(--background-fill-primary);
+  overflow: hidden;
 }
-.app-about p:last-child { margin-bottom: 0; }
-.app-about a {
+.about-panel summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem 1rem;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--body-text-color-subdued);
+  user-select: none;
+}
+.about-panel summary::-webkit-details-marker { display: none; }
+.about-panel summary:hover { color: var(--body-text-color); }
+.about-panel .about-chevron {
+  font-family: ui-sans-serif, sans-serif;
+  font-size: 0.85rem;
+  transition: transform 0.15s ease;
+}
+.about-panel[open] .about-chevron { transform: rotate(180deg); }
+.about-panel .about-body {
+  margin: 0;
+  padding: 0 1.1rem 0.9rem 1.1rem;
+  border-top: 1px solid var(--border-color-primary);
+  padding-top: 0.85rem;
+  color: var(--body-text-color-subdued);
+  font-size: 0.88rem;
+  line-height: 1.65;
+}
+.about-panel .about-body a {
   color: var(--body-text-color-subdued);
   text-decoration: underline;
   text-decoration-color: var(--border-color-primary);
 }
-.app-about a:hover { color: var(--primary-600); text-decoration-color: var(--primary-600); }
+.about-panel .about-body a:hover { color: var(--primary-600); text-decoration-color: var(--primary-600); }
 .section-label p {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 1.05rem;
@@ -637,23 +669,33 @@ CSS = """
 
 # Same "about" text as the original Yale webserver, with the CLI/issues
 # links pointed at this repo instead of the original site's own pages.
-ABOUT_MD = (
-    "LigParGen is a web-based service that provides force field (FF) "
-    "parameters for organic molecules or ligands, offered by the "
-    "Jorgensen group. LigParGen provides bond, angle, dihedral, and "
-    "Lennard-Jones OPLS-AA parameters with 1.14\\*CM1A or "
-    "1.14\\*CM1A-LBCC partial atomic charges. Server provides parameter "
-    "and topology files for commonly used molecular dynamics and Monte "
-    "Carlo packages OpenMM, Gromacs, NAMD, CHARMM, LAMMPS, TINKER, "
-    "CNS/X-PLOR, Q, DESMOND, BOSS and MCPRO. Also, the PQR file is "
-    "generated. Supported input formats: SMILES, MOL and PDB. Maximum "
-    "ligand size allowed is 200 atoms. Check "
-    "[this link](https://github.com/leelasd/LigParGen_2.3) to use "
-    "LigParGen software from command-line in your local computer. "
-    "Please, report any issue on the "
-    "[LigParGen issues](https://github.com/leelasd/LigParGen_2.3/issues) "
-    "page."
-)
+# Collapsed by default (a <details> disclosure, not gr.Markdown) so this
+# secondary text doesn't compete with the hero header or push Step 1 below
+# the fold -- expand on demand instead.
+ABOUT_HTML = """
+<details class="about-panel">
+  <summary>
+    <span>About LigParGen</span>
+    <span class="about-chevron">&#9662;</span>
+  </summary>
+  <p class="about-body">
+    LigParGen is a web-based service that provides force field (FF)
+    parameters for organic molecules or ligands, offered by the Jorgensen
+    group. LigParGen provides bond, angle, dihedral, and Lennard-Jones
+    OPLS-AA parameters with 1.14*CM1A or 1.14*CM1A-LBCC partial atomic
+    charges. Server provides parameter and topology files for commonly
+    used molecular dynamics and Monte Carlo packages OpenMM, Gromacs,
+    NAMD, CHARMM, LAMMPS, TINKER, CNS/X-PLOR, Q, DESMOND, BOSS and MCPRO.
+    Also, the PQR file is generated. Supported input formats: SMILES, MOL
+    and PDB. Maximum ligand size allowed is 200 atoms. Check
+    <a href="https://github.com/leelasd/LigParGen_2.3" target="_blank" rel="noopener">this link</a>
+    to use LigParGen software from command-line in your local computer.
+    Please, report any issue on the
+    <a href="https://github.com/leelasd/LigParGen_2.3/issues" target="_blank" rel="noopener">LigParGen issues</a>
+    page.
+  </p>
+</details>
+"""
 
 
 # Same citations as the CLI's own --help text (LigParGen/Converter.py) plus
@@ -687,7 +729,7 @@ def build_ui():
             "OPLS-AA/CM1A force-field parameter generator for organic ligands.",
             elem_classes="app-subtitle",
         )
-        gr.Markdown(ABOUT_MD, elem_classes="app-about")
+        gr.HTML(ABOUT_HTML)
 
         with gr.Row():
             with gr.Column():
