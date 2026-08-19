@@ -286,8 +286,9 @@ CSS = """
 }
 .section-label p {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 0.72rem;
-  letter-spacing: 0.1em;
+  font-size: 1.05rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--body-text-color-subdued);
   border-bottom: 1px solid var(--border-color-primary);
