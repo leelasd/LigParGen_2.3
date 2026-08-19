@@ -302,6 +302,24 @@ CSS = """
 #smiles_box textarea, #status_box textarea {
   font-family: 'IBM Plex Mono', ui-monospace, monospace !important;
 }
+.citations ol {
+  padding-left: 1.2rem;
+  margin: 0;
+}
+.citations li {
+  color: var(--body-text-color-subdued);
+  font-size: 0.85rem;
+  line-height: 1.55;
+  margin-bottom: 0.85rem;
+}
+.citations li:last-child { margin-bottom: 0; }
+.citations li strong { color: var(--body-text-color); font-weight: 500; }
+.citations a {
+  color: var(--body-text-color-subdued);
+  text-decoration: underline;
+  text-decoration-color: var(--border-color-primary);
+}
+.citations a:hover { color: var(--primary-600); text-decoration-color: var(--primary-600); }
 
 /* Belt-and-braces alongside FORCE_LIGHT_JS above: pin Ketcher's own DOM to
    light regardless of the page's color scheme, since its bundle assumes a
@@ -310,6 +328,25 @@ CSS = """
 #ketcher-panel, #ketcher-panel * { color: #1a1a1a; }
 #ketcher-panel { color-scheme: light; }
 #ketcher-panel #ketcher-use-btn:hover { background: #4338ca !important; border-color: #4338ca !important; }
+"""
+
+
+# Same three citations as the CLI's own --help text (LigParGen/Converter.py),
+# reproduced here for the web UI in place of the original webserver's
+# References section.
+REFERENCES_MD = """
+1. Dodda, L. S.; Cabeza de Vaca, I.; Tirado-Rives, J.; Jorgensen, W. L.
+   **LigParGen web server: an automatic OPLS-AA parameter generator for
+   organic ligands.** *Nucleic Acids Res.* **2017**, *45* (W1), W331-W336.
+   [doi:10.1093/nar/gkx312](https://doi.org/10.1093/nar/gkx312)
+2. Dodda, L. S.; Vilseck, J. Z.; Tirado-Rives, J.; Jorgensen, W. L.
+   **1.14\\*CM1A-LBCC: Localized Bond-Charge Corrected CM1A Charges for
+   Condensed-Phase Simulations.** *J. Phys. Chem. B* **2017**, *121* (15),
+   3864-3870. [doi:10.1021/acs.jpcb.7b00272](https://doi.org/10.1021/acs.jpcb.7b00272)
+3. Udier-Blagovic, M.; Morales De Tirado, P.; Pearlman, S. A.; Jorgensen, W. L.
+   **Accuracy of free energies of hydration using CM1 and CM3 atomic
+   charges.** *J. Comput. Chem.* **2004**, *25*, 1322-1332.
+   [doi:10.1002/jcc.20059](https://doi.org/10.1002/jcc.20059)
 """
 
 
@@ -362,6 +399,9 @@ def build_ui():
                     status = gr.Textbox(label="Status", interactive=False, elem_id="status_box")
                     output_zip = gr.File(label="Download all output formats (.zip)")
                     preview = Molecule3D(label="3D preview (optimized geometry)", reps=[{"style": "stick"}])
+
+                gr.Markdown("References", elem_classes="section-label")
+                gr.Markdown(REFERENCES_MD, elem_classes="citations")
 
         submit.click(
             run_ligpargen,
