@@ -22,7 +22,8 @@ import gradio as gr
 from gradio_molecule3d import Molecule3D
 from huggingface_hub import snapshot_download
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdDetermineBonds
+from rdkit.Geometry import Point3D
 
 from LigParGen.Converter import convert
 
@@ -90,6 +91,65 @@ def count_heavy_and_h_atoms(smiles=None, file_path=None):
     return mol.GetNumAtoms()
 
 
+def build_preview_sdf(pdb_path, resname, template_smiles=None):
+    """Build an SDF (bond orders intact) from the final optimized PDB, for
+    the 3D viewer.
+
+    PDB has no bond-order field, so feeding Molecule3D the raw output PDB
+    rendered every bond as an undifferentiated single stick, no visible
+    double/triple/aromatic bonds -- gradio_molecule3d only accepts
+    pdb/sdf/mol2/pdb1 (checked directly against its bundled JS), not a bare
+    .mol, so SDF (a MOL block plus an optional data section RDKit's
+    SDWriter already produces) is the right target format here, not MOL.
+
+    Reuses the same AssignBondOrdersFromTemplate technique as
+    LigParGen.mol_boss.convert_pdb2mol_with_smiles when a trusted SMILES is
+    available (maps the final geometry's connectivity through known-correct
+    bond orders), falling back to RDKit's geometry-based rdDetermineBonds
+    when it isn't (a plain PDB upload with no accompanying SMILES).
+
+    Returns the SDF path, or None if nothing could be built -- callers
+    should fall back to the raw PDB preview in that case rather than show
+    nothing.
+    """
+    pdb_mol = Chem.MolFromPDBFile(pdb_path, removeHs=False, sanitize=True)
+    if pdb_mol is None:
+        return None
+
+    fixed = None
+    if template_smiles:
+        template = Chem.MolFromSmiles(template_smiles)
+        if template is not None:
+            try:
+                fixed = AllChem.AssignBondOrdersFromTemplate(template, pdb_mol)
+            except ValueError:
+                fixed = None  # SMILES didn't match this PDB's connectivity -- fall through
+
+    if fixed is None:
+        rw = Chem.RWMol()
+        conf = Chem.Conformer(pdb_mol.GetNumAtoms())
+        pdb_conf = pdb_mol.GetConformer()
+        for i, atom in enumerate(pdb_mol.GetAtoms()):
+            rw.AddAtom(Chem.Atom(atom.GetSymbol()))
+            pos = pdb_conf.GetAtomPosition(i)
+            conf.SetAtomPosition(i, Point3D(pos.x, pos.y, pos.z))
+        rw.AddConformer(conf, assignId=True)
+        try:
+            rdDetermineBonds.DetermineBonds(rw, charge=0, embedChiral=False)
+            Chem.SanitizeMol(rw)
+            fixed = rw
+        except Exception:  # noqa: BLE001 -- geometry-based perception can fail on odd structures
+            return None
+
+    sdf_path = os.path.join(os.path.dirname(pdb_path), "%s_preview.sdf" % resname)
+    try:
+        with Chem.SDWriter(sdf_path) as writer:
+            writer.write(fixed)
+    except Exception:  # noqa: BLE001 -- never let a preview-only step break the job
+        return None
+    return sdf_path
+
+
 def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, progress=gr.Progress()):
     smiles_text = (smiles_text or "").strip()
     upload_path = upload_file if upload_file is not None else None
@@ -123,6 +183,15 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
     resname = "".join(random.choices(string.ascii_uppercase, k=3))
     job_dir = tempfile.mkdtemp(prefix="ligpargen_")
 
+    # Trusted SMILES for the 3D preview's bond-order fix (build_preview_sdf) --
+    # separate from kwargs["smiles"], which only LigParGen.Converter.convert()
+    # itself uses (and only for the PDB-upload case, to fix the actual BOSS
+    # input). Typed/drawn SMILES and PDB+SMILES both already have one; a plain
+    # MOL upload already carries correct bond orders of its own, so derive an
+    # equivalent SMILES from it too, rather than leaving the preview to the
+    # geometry-only fallback when a perfectly good source of truth exists.
+    preview_template_smiles = smiles_text or None
+
     kwargs = dict(opt=int(opt_iters), charge=resolved_charge, lbcc=lbcc, resname=resname)
     if upload_path:
         staged = os.path.join(job_dir, os.path.basename(upload_path))
@@ -136,6 +205,14 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
                 kwargs["smiles"] = smiles_text
         else:
             kwargs["mol"] = os.path.basename(staged)
+            if preview_template_smiles is None:
+                mol_for_smiles = Chem.MolFromMolFile(staged, sanitize=False)
+                if mol_for_smiles is not None:
+                    try:
+                        Chem.SanitizeMol(mol_for_smiles)
+                        preview_template_smiles = Chem.MolToSmiles(mol_for_smiles)
+                    except Exception:  # noqa: BLE001 -- preview-only; geometry fallback still applies
+                        pass
     else:
         kwargs["smiles"] = smiles_text
 
@@ -157,8 +234,14 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
     preview_pdb_candidates = glob.glob(f"/tmp/{resname}.pdb")
     preview_pdb = preview_pdb_candidates[0] if preview_pdb_candidates else None
 
+    preview_file = preview_pdb
+    if preview_pdb:
+        preview_sdf = build_preview_sdf(preview_pdb, resname, template_smiles=preview_template_smiles)
+        if preview_sdf:
+            preview_file = preview_sdf
+
     progress(1.0, desc="Done")
-    return zip_path, preview_pdb, f"Done -- {resname}"
+    return zip_path, preview_file, f"Done -- {resname}"
 
 
 KETCHER_HTML = """
