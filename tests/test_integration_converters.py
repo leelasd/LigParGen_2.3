@@ -221,9 +221,21 @@ def elements_from_cms(text, n_atoms):
 # Zmat, pickle the mol, then run each mainBOSS2*() in the same order).
 # --------------------------------------------------------------------------
 
-@pytest.fixture(scope="module", params=FIXTURES, ids=FIXTURE_IDS)
-def converted(request):
-    fname, resname, _desc = request.param
+# Cache, keyed by resname, of _run_conversion()'s result dict -- shared
+# between the `converted` fixture below and
+# test_ring_completion_adds_tabulated_bonded_terms(), which independently
+# needs both the "HRW" and "HRC" results in one test. Without this, that
+# test re-ran the whole (slow, real-BOSS) pipeline a second time for
+# fixtures `converted` had already processed in the same session; whichever
+# caller hits a given resname first now runs it, and the other reuses the
+# cached dict.
+_CONVERTED_CACHE = {}
+
+
+def _run_conversion(fname, resname):
+    if resname in _CONVERTED_CACHE:
+        return _CONVERTED_CACHE[resname]
+
     src = os.path.join(FIXTURES_DIR, fname)
     assert os.path.isfile(src), "missing fixture: %s" % src
 
@@ -267,10 +279,9 @@ def converted(request):
         if os.path.isfile(path):
             files[ext] = open(path).read()
 
-    yield {
+    result = {
         "resname": resname,
         "fname": fname,
-        "mol": mol,
         "n_atoms_ref": len(types),
         "n_atoms_zmat": _real_atom_count_from_zmat(src),
         "n_bonds": len(mol.MolData["BONDS"]["cl1"]),
@@ -281,6 +292,14 @@ def converted(request):
     }
 
     mol.cleanup()
+    _CONVERTED_CACHE[resname] = result
+    return result
+
+
+@pytest.fixture(scope="module", params=FIXTURES, ids=FIXTURE_IDS)
+def converted(request):
+    fname, resname, _desc = request.param
+    return _run_conversion(fname, resname)
 
 
 # --------------------------------------------------------------------------
@@ -383,19 +402,14 @@ def test_ring_completion_adds_tabulated_bonded_terms():
     raw = [c for c in FIXTURES if c[1] == "HRW"][0]
     complete = [c for c in FIXTURES if c[1] == "HRC"][0]
 
-    def run(fname, resname):
-        src = os.path.join(FIXTURES_DIR, fname)
-        os.chdir("/tmp")
-        for stale in glob.glob("/tmp/%s.*" % resname):
-            os.remove(stale)
-        shutil.copyfile(src, "/tmp/%s.z" % resname)
-        mol = BOSSReader("%s.z" % resname, 0, 0, False)
-        result = (len(mol.MolData["BONDS"]["cl1"]), len(mol.MolData["ANGLES"]["cl1"]))
-        mol.cleanup()
-        return result
-
-    raw_bonds, raw_angles = run(raw[0], raw[1])
-    complete_bonds, complete_angles = run(complete[0], complete[1])
+    # _run_conversion() caches by resname, so this reuses whatever the
+    # `converted` fixture already computed for "HRW"/"HRC" in this session
+    # instead of re-running the real-BOSS pipeline a second time for the
+    # same two fixtures (see _CONVERTED_CACHE's docstring).
+    raw_result = _run_conversion(raw[0], raw[1])
+    complete_result = _run_conversion(complete[0], complete[1])
+    raw_bonds, raw_angles = raw_result["n_bonds"], raw_result["n_angles"]
+    complete_bonds, complete_angles = complete_result["n_bonds"], complete_result["n_angles"]
 
     assert complete_bonds > raw_bonds, (
         "his_ring_complete.z's injected 'Additional Bonds' did not make BOSS "

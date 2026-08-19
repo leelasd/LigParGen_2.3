@@ -275,6 +275,113 @@ def Refine_file(fname):
     return lines
 
 
+# banner text -> impDat key(s) it is expected to set. Module-level (not
+# inline in get_ImpDat) so tests can locate section boundaries in captured
+# BOSS out/sum text without needing a real BOSS install -- see
+# tests/conftest.py, which calls find_boss_sections() directly rather than
+# keeping its own copy of this banner list (a prior hand-copied duplicate
+# risked silently desyncing from this one).
+ODAT_BANNERS = [
+    ('Z-Matrix for Reference Solutes', ['ATMinit']),
+    ('Net Charge', ['TotalQ']),
+    ('OPLS Force Field Parameters', ['ATMfinal', 'NBDinit']),
+    ('Fourier Coefficients', ['TORinit', 'NBDfinal']),
+    ('Bond Stretching Parameters', ['TORfinal', 'BNDinit']),
+    ('Angle Bending Parameters', ['BNDfinal', 'ANGinit']),
+    ('Non-bonded Pairs List', ['ANGfinal', 'PAIRinit']),
+    ('Solute 0:   X          Y          Z', ['XYZinit']),
+    ('Atom I      Atom J      RIJ', ['XYZfinal']),
+    ('Checking', ['PAIRfinal']),
+]
+SDAT_BANNERS = [
+    ('Additional Dihedrals follow', ['ADDinit']),
+    ('Domain Definitions follow', ['ADDfinal']),
+]
+
+
+def find_boss_sections(odat, sdat, zmat_name='<zmat>'):
+    """Locate every BOSS out/sum section boundary get_ImpDat() needs, by
+    banner-text match, and fail loudly (naming the missing banner, or an
+    empty/truncated section) instead of a bare KeyError or bad slice far
+    away from the actual cause."""
+    impDat = {}
+    for nl in range(len(odat)):
+        if 'Z-Matrix for Reference Solutes' in odat[nl]:
+            impDat['ATMinit'] = nl
+        elif 'Net Charge' in odat[nl]:
+            impDat['TotalQ'] = nl
+        elif 'OPLS Force Field Parameters' in odat[nl]:
+            impDat['ATMfinal'] = nl
+            impDat['NBDinit'] = nl
+        elif 'Fourier Coefficients' in odat[nl]:
+            impDat['TORinit'] = nl
+            impDat['NBDfinal'] = nl
+        elif 'Bond Stretching Parameters' in odat[nl]:
+            impDat['TORfinal'] = nl
+            impDat['BNDinit'] = nl
+        elif 'Angle Bending Parameters' in odat[nl]:
+            impDat['BNDfinal'] = nl
+            impDat['ANGinit'] = nl
+        elif 'Non-bonded Pairs List' in odat[nl]:
+            impDat['ANGfinal'] = nl
+            impDat['PAIRinit'] = nl
+        elif 'Solute 0:   X          Y          Z' in odat[nl]:
+            impDat['XYZinit'] = nl
+        elif 'Atom I      Atom J      RIJ' in odat[nl]:
+            impDat['XYZfinal'] = nl
+        elif 'Checking' in odat[nl]:
+            impDat['PAIRfinal'] = nl
+#### THIS PART IS READ FROM SUM FILE ###
+    for ml in range(len(sdat)):
+        if 'Additional Dihedrals follow' in sdat[ml]:
+            impDat['ADDinit'] = ml
+        elif 'Domain Definitions follow' in sdat[ml]:
+            impDat['ADDfinal'] = ml
+#### THIS PART IS READ FROM SUM FILE ###
+
+    missing_banners = [
+        banner for banner, keys in ODAT_BANNERS + SDAT_BANNERS
+        if any(key not in impDat for key in keys)
+    ]
+    if missing_banners:
+        raise ValueError(
+            "BOSSReader (%s): could not locate the following expected "
+            "section banner(s) in the BOSS output (/tmp/out or "
+            "/tmp/sum): %s. The BOSS run may have failed, or its output "
+            "format has changed." % (
+                zmat_name, ', '.join(repr(b) for b in missing_banners)))
+
+    # Sections that must contain at least one line of content once the
+    # banner-derived start/end indices are used to slice odat below.
+    # ('Additional Dihedrals' is intentionally excluded: an empty block
+    # there just means the solute has no additional dihedrals, which is
+    # normal.)
+    non_empty_sections = [
+        ('ATOMS', 'ATMinit', 'ATMfinal'),
+        ('Q_LJ (non-bonded)', 'NBDinit', 'NBDfinal'),
+        ('BONDS', 'BNDinit', 'BNDfinal'),
+        ('ANGLES', 'ANGinit', 'ANGfinal'),
+        ('TORSIONS', 'TORinit', 'TORfinal'),
+        ('XYZ', 'XYZinit', 'XYZfinal'),
+        ('PAIRS', 'PAIRinit', 'PAIRfinal'),
+    ]
+    for name, start_key, end_key in non_empty_sections:
+        start, end = impDat[start_key], impDat[end_key]
+        if end <= start:
+            raise ValueError(
+                "BOSSReader (%s): the '%s' section of the BOSS output "
+                "is empty or out of order (lines %d:%d) -- the output "
+                "may be malformed." % (zmat_name, name, start, end))
+
+    if impDat['TotalQ'] + 4 > len(odat):
+        raise ValueError(
+            "BOSSReader (%s): the 'Net Charge' section is truncated -- "
+            "expected 4 lines starting at line %d but /tmp/out only has "
+            "%d lines." % (zmat_name, impDat['TotalQ'], len(odat)))
+
+    return impDat
+
+
 class BOSSReader(object):
 
     def __init__(self, zmatrix, optim, charge=0, lbcc=False):
@@ -578,103 +685,9 @@ class BOSSReader(object):
         odat = Refine_file('/tmp/out')
         sdat = Refine_file('/tmp/sum')
         MolData = {}
-        impDat = {}
         MolData['PDB'] = Refine_file('/tmp/plt.pdb')
 
-        # banner text -> impDat key(s) it is expected to set. Used below to
-        # fail loudly (naming the missing banner) instead of the section
-        # simply being absent from impDat and later raising a bare KeyError
-        # (or worse, a bad slice) far away from the actual cause.
-        odat_banners = [
-            ('Z-Matrix for Reference Solutes', ['ATMinit']),
-            ('Net Charge', ['TotalQ']),
-            ('OPLS Force Field Parameters', ['ATMfinal', 'NBDinit']),
-            ('Fourier Coefficients', ['TORinit', 'NBDfinal']),
-            ('Bond Stretching Parameters', ['TORfinal', 'BNDinit']),
-            ('Angle Bending Parameters', ['BNDfinal', 'ANGinit']),
-            ('Non-bonded Pairs List', ['ANGfinal', 'PAIRinit']),
-            ('Solute 0:   X          Y          Z', ['XYZinit']),
-            ('Atom I      Atom J      RIJ', ['XYZfinal']),
-            ('Checking', ['PAIRfinal']),
-        ]
-        sdat_banners = [
-            ('Additional Dihedrals follow', ['ADDinit']),
-            ('Domain Definitions follow', ['ADDfinal']),
-        ]
-
-        for nl in range(len(odat)):
-            if 'Z-Matrix for Reference Solutes' in odat[nl]:
-                impDat['ATMinit'] = nl
-            elif 'Net Charge' in odat[nl]:
-                impDat['TotalQ'] = nl
-            elif 'OPLS Force Field Parameters' in odat[nl]:
-                impDat['ATMfinal'] = nl
-                impDat['NBDinit'] = nl
-            elif 'Fourier Coefficients' in odat[nl]:
-                impDat['TORinit'] = nl
-                impDat['NBDfinal'] = nl
-            elif 'Bond Stretching Parameters' in odat[nl]:
-                impDat['TORfinal'] = nl
-                impDat['BNDinit'] = nl
-            elif 'Angle Bending Parameters' in odat[nl]:
-                impDat['BNDfinal'] = nl
-                impDat['ANGinit'] = nl
-            elif 'Non-bonded Pairs List' in odat[nl]:
-                impDat['ANGfinal'] = nl
-                impDat['PAIRinit'] = nl
-            elif 'Solute 0:   X          Y          Z' in odat[nl]:
-                impDat['XYZinit'] = nl
-            elif 'Atom I      Atom J      RIJ' in odat[nl]:
-                impDat['XYZfinal'] = nl
-            elif 'Checking' in odat[nl]:
-                impDat['PAIRfinal'] = nl
-#### THIS PART IS READ FROM SUM FILE ###
-        for ml in range(len(sdat)):
-            if 'Additional Dihedrals follow' in sdat[ml]:
-                impDat['ADDinit'] = ml
-            elif 'Domain Definitions follow' in sdat[ml]:
-                impDat['ADDfinal'] = ml
-#### THIS PART IS READ FROM SUM FILE ###
-
-        missing_banners = [
-            banner for banner, keys in odat_banners + sdat_banners
-            if any(key not in impDat for key in keys)
-        ]
-        if missing_banners:
-            raise ValueError(
-                "BOSSReader (%s): could not locate the following expected "
-                "section banner(s) in the BOSS output (/tmp/out or "
-                "/tmp/sum): %s. The BOSS run may have failed, or its output "
-                "format has changed." % (
-                    self.zmat, ', '.join(repr(b) for b in missing_banners)))
-
-        # Sections that must contain at least one line of content once the
-        # banner-derived start/end indices are used to slice odat below.
-        # ('Additional Dihedrals' is intentionally excluded: an empty block
-        # there just means the solute has no additional dihedrals, which is
-        # normal.)
-        non_empty_sections = [
-            ('ATOMS', 'ATMinit', 'ATMfinal'),
-            ('Q_LJ (non-bonded)', 'NBDinit', 'NBDfinal'),
-            ('BONDS', 'BNDinit', 'BNDfinal'),
-            ('ANGLES', 'ANGinit', 'ANGfinal'),
-            ('TORSIONS', 'TORinit', 'TORfinal'),
-            ('XYZ', 'XYZinit', 'XYZfinal'),
-            ('PAIRS', 'PAIRinit', 'PAIRfinal'),
-        ]
-        for name, start_key, end_key in non_empty_sections:
-            start, end = impDat[start_key], impDat[end_key]
-            if end <= start:
-                raise ValueError(
-                    "BOSSReader (%s): the '%s' section of the BOSS output "
-                    "is empty or out of order (lines %d:%d) -- the output "
-                    "may be malformed." % (self.zmat, name, start, end))
-
-        if impDat['TotalQ'] + 4 > len(odat):
-            raise ValueError(
-                "BOSSReader (%s): the 'Net Charge' section is truncated -- "
-                "expected 4 lines starting at line %d but /tmp/out only has "
-                "%d lines." % (self.zmat, impDat['TotalQ'], len(odat)))
+        impDat = find_boss_sections(odat, sdat, zmat_name=self.zmat)
 
         MolData['ATOMS'] = self.get_atinfo(
             odat[impDat['ATMinit']:impDat['ATMfinal']])

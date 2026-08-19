@@ -11,53 +11,20 @@ can build a BOSSReader instance with BOSSReader.__new__(BOSSReader)
 (skipping __init__, which would call Get_OPT() and actually try to run
 BOSS) and call those methods directly against slices of the captured text.
 
-The section-boundary banner strings below are copied from
-BOSSReader.get_ImpDat() (LigParGen/BOSSReader.py) -- kept as a literal
-duplicate rather than imported, because get_ImpDat() itself always calls
-Get_OPT() (which requires a real BOSS install) before it ever gets to this
-banner-scanning step, so it cannot be called directly against captured
-text. If BOSSReader.py's own banner text ever changes, this list needs to
-be updated to match.
+Section boundaries are located via BOSSReader.find_boss_sections() --
+the same banner-scanning logic get_ImpDat() itself uses -- rather than a
+hand-copied duplicate of it, so this test layer can't silently desync
+from what section boundaries BOSSReader actually computes. It's a plain
+function of already-captured text (no Get_OPT()/real-BOSS call involved),
+so it's safe to call directly here.
 """
 import os
 
 import pytest
 
-from LigParGen.BOSSReader import BOSSReader, Refine_file
+from LigParGen.BOSSReader import BOSSReader, Refine_file, find_boss_sections
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), 'fixtures')
-
-ODAT_BANNERS = [
-    ('Z-Matrix for Reference Solutes', ('ATMinit',)),
-    ('Net Charge', ('TotalQ',)),
-    ('OPLS Force Field Parameters', ('ATMfinal', 'NBDinit')),
-    ('Fourier Coefficients', ('TORinit', 'NBDfinal')),
-    ('Bond Stretching Parameters', ('TORfinal', 'BNDinit')),
-    ('Angle Bending Parameters', ('BNDfinal', 'ANGinit')),
-    ('Non-bonded Pairs List', ('ANGfinal', 'PAIRinit')),
-    ('Solute 0:   X          Y          Z', ('XYZinit',)),
-    ('Atom I      Atom J      RIJ', ('XYZfinal',)),
-    ('Checking', ('PAIRfinal',)),
-]
-SDAT_BANNERS = [
-    ('Additional Dihedrals follow', ('ADDinit',)),
-    ('Domain Definitions follow', ('ADDfinal',)),
-]
-
-
-def _find_sections(odat, sdat):
-    impDat = {}
-    for nl, line in enumerate(odat):
-        for banner, keys in ODAT_BANNERS:
-            if banner in line:
-                for k in keys:
-                    impDat[k] = nl
-    for ml, line in enumerate(sdat):
-        for banner, keys in SDAT_BANNERS:
-            if banner in line:
-                for k in keys:
-                    impDat[k] = ml
-    return impDat
 
 
 class BossSections(object):
@@ -70,7 +37,7 @@ class BossSections(object):
         boss_dir = os.path.join(FIXTURES_DIR, name, 'boss')
         self.odat = Refine_file(os.path.join(boss_dir, 'out'))
         self.sdat = Refine_file(os.path.join(boss_dir, 'sum'))
-        self.d = _find_sections(self.odat, self.sdat)
+        self.d = find_boss_sections(self.odat, self.sdat, zmat_name=name)
         self.reader = BOSSReader.__new__(BOSSReader)
 
     def slice(self, start_key, end_key):

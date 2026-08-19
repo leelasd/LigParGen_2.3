@@ -74,8 +74,10 @@ this class of bug):
    `CB CG ND1 CE1 NE2 HE CD2 HNE HD`).
 4. Injected those 9 bonds / 13 angles into the unmodified Zmat's
    "Additional Bonds follow" / "Additional Bond Angles follow" sections
-   (see `his_original.z` vs `his_ring_completed.z` -- a plain diff shows
-   exactly this injection and nothing else). Dihedrals were deliberately
+   (see `tests/fixtures/his.z` vs `tests/fixtures/his_ring_complete.z` --
+   the same pair issue #24's integration test drives BOSS with; a plain
+   diff shows exactly this injection and nothing else). Dihedrals were
+   deliberately
    left alone for BOSS's own second `xSPM` pass to re-derive from the now-
    complete bond/angle set, rather than injected directly.
 5. Ran `BOSSReader(zmat='his.z', optim=0, charge=0, lbcc=False)` a *second*
@@ -120,14 +122,16 @@ rule.
 
 ## What each file is
 
-- `his_original.z` -- `peptide/his.z`, copied byte-for-byte from the local
-  BOSS install, unmodified. Not itself fed to the pass that produced
-  `out`/`sum` (see "Ring completion" above) -- kept here so the injected
-  diff against `his_ring_completed.z` is reviewable.
-- `his_ring_completed.z` -- `his_original.z` plus the 9 injected
-  "Additional Bonds" lines and 13 injected "Additional Bond Angles" lines
-  described above. This is the actual `BOSSReader` input for the pass that
-  produced `out`/`sum`.
+The Zmat inputs themselves (`peptide/his.z`, unmodified, and the same file
+with the 9 injected "Additional Bonds" / 13 injected "Additional Bond
+Angles" lines described above) live at the top level of `tests/fixtures/`
+as `his.z` / `his_ring_complete.z` -- not duplicated under this directory --
+since issue #24's integration test (`tests/test_integration_converters.py`)
+feeds BOSS those same two files directly, and `his_ring_complete.z` is the
+actual `BOSSReader` input that produced the `out`/`sum` capture below (a
+plain diff between the two `.z` files is exactly the injection and nothing
+else).
+
 - `out` -- BOSS's raw Z-matrix-with-Cartesian-coordinates dump plus its own
   banner, captured from `/tmp/out` right after the second
   `BOSSReader(...)` pass completed (same file `BOSSReader.get_ImpDat()`
