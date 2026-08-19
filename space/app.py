@@ -10,6 +10,14 @@ doesn't have.
 BOSS is fetched into this container at startup from a private HF Dataset
 repo (see docs/adr/0003 in the main repo) -- never committed here, never
 baked into the image.
+
+Also runs as an MCP server (Gradio's built-in mcp_server=True) alongside
+the web UI, exposing run_ligpargen() as an MCP tool at the same host's
+/gradio_api/mcp/sse -- so an agent can submit a molecule and get back
+parameter files the same way a human using the form does. That function's
+type hints and docstring are what an MCP client sees as the tool's
+argument schema and description, so keep them accurate if its signature
+changes.
 """
 import collections
 import glob
@@ -25,6 +33,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal, Optional
 
 import gradio as gr
 from gradio_molecule3d import Molecule3D
@@ -338,7 +347,50 @@ def run_convert_with_timeout(kwargs, job_dir, timeout_s):
         )
 
 
-def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, request: gr.Request, progress=gr.Progress()):
+def run_ligpargen(
+    smiles_text: str,
+    upload_file: Optional[str],
+    opt_iters: Literal["0", "1", "2", "3"],
+    charge_model: Literal[
+        "1.14*CM1A-LBCC (neutral molecules)",
+        "1.14*CM1A (neutral or charged)",
+    ],
+    charge: Literal["0", "-1", "-2", "1", "2"],
+    request: gr.Request,
+    progress=gr.Progress(),
+) -> tuple:
+    """Generate OPLS-AA/CM1A force-field parameters for an organic ligand.
+
+    Runs BOSS + LigParGen on a molecule and returns a zip containing
+    parameter/topology files for OpenMM, GROMACS, CHARMM, LAMMPS, TINKER,
+    CNS/X-PLOR, Q, DESMOND, and BOSS/MCPRO, plus a PQR file and a 3D
+    preview of the optimized geometry. Molecules are limited to 200 atoms
+    (heavy atoms plus hydrogens); a single job is stopped if it runs
+    longer than about a minute, and submissions from the same client are
+    rate-limited.
+
+    Provide smiles_text (a typed SMILES string, e.g. "c1ccccc1" for
+    benzene) or upload_file (a MOL file with all hydrogens already
+    explicit, or a PDB file). A PDB upload_file should be paired with
+    smiles_text, which is then used as a trusted template to fix the
+    PDB's bond orders and add any missing hydrogens. charge_model
+    "1.14*CM1A-LBCC (neutral molecules)" forces charge to "0"
+    regardless of the charge argument; only "1.14*CM1A (neutral or
+    charged)" honors a nonzero charge.
+
+    Args:
+        smiles_text: SMILES string for the molecule.
+        upload_file: PDB or MOL file to convert, as a path or URL.
+        opt_iters: BOSS optimization iterations, "0" to "3".
+        charge_model: Partial-charge scheme -- see description above.
+        charge: Net formal charge of the molecule.
+
+    Returns:
+        A 3-tuple: path to a .zip file with all output formats, path to
+        an SDF or PDB file of the optimized geometry for 3D preview (or
+        None if a preview could not be built), and a short human-readable
+        status message.
+    """
     start_time = time.perf_counter()
     smiles_text = (smiles_text or "").strip()
     upload_path = upload_file if upload_file is not None else None
@@ -739,7 +791,7 @@ def build_ui():
                         label="SMILES", placeholder="Enter SMILES, e.g. c1ccccc1", elem_id="smiles_box"
                     )
                     gr.Button("Sample: Benzene", size="sm").click(
-                        lambda: "c1ccccc1", inputs=None, outputs=smiles_box
+                        lambda: "c1ccccc1", inputs=None, outputs=smiles_box, api_name=False
                     )
 
                     gr.Markdown("**Or draw a structure:**")
@@ -780,6 +832,7 @@ def build_ui():
             run_ligpargen,
             inputs=[smiles_box, upload, opt_iters, charge_model, charge],
             outputs=[output_zip, preview, status],
+            api_name="run_ligpargen",
         )
 
         demo.load(fn=None, inputs=None, outputs=None, js=FORCE_LIGHT_JS)
@@ -793,4 +846,4 @@ if __name__ == "__main__":
     fetch_boss()
     os.environ["BOSSdir"] = BOSS_DIR
     _usage_scheduler = setup_usage_scheduler()
-    build_ui().launch(server_name="0.0.0.0", server_port=7860)
+    build_ui().launch(server_name="0.0.0.0", server_port=7860, mcp_server=True)
