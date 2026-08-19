@@ -25,6 +25,31 @@ from rdkit import Chem
 _PERIODIC_TABLE = Chem.GetPeriodicTable()
 
 
+def _redistribute_charge_rounding_residual(Qs):
+    """Nudge each atom's charge (Qs[i][1], a string) so the set sums to
+    exactly the nearest integer, in place.
+
+    BOSS itself only prints each atom's CM1A charge to 4 decimal places;
+    summed across a whole molecule that finite precision alone is enough
+    to land a few 1e-4 away from the intended net integer charge (reported
+    upstream, e.g. leelasd/ligpargen#59: GROMACS grompp warning about a
+    "System has non-zero total charge" of -7.9996 instead of -8, for a
+    molecule LigParGen otherwise parameterized correctly -- Converter.py's
+    own assertion already confirmed BOSS's TotalQ rounds to the requested
+    integer charge to 3 decimals, so this is purely a print-precision
+    artifact, not a real charge error). Split the residual evenly across
+    every atom -- the correction here is on the order of 1e-4/N per atom,
+    chemically meaningless, but makes every downstream file's own charge
+    column sum to exactly the right integer instead of leaving each
+    format's writer to silently reproduce the same rounding gap.
+    """
+    charges = [float(q[1]) for q in Qs]
+    residual = round(sum(charges)) - sum(charges)
+    correction = residual / len(charges)
+    for i, q in enumerate(Qs):
+        q[1] = '%.6f' % (charges[i] + correction)
+
+
 def bossData(molecule_data):
     ats_file = molecule_data.MolData['ATOMS']
     # Elements come from MolData['XYZ']'s own atomic-number column, not
@@ -53,6 +78,7 @@ def bossData(molecule_data):
     Qs = molecule_data.MolData['Q_LJ']
     assert len(Qs) == len(types), 'Please check the at_info and Q_LJ_dat files'
     assert len(xyz) == len(types), 'Please check the at_info and XYZ data'
+    _redistribute_charge_rounding_residual(Qs)
     num2typ2symb = {i: types[i] for i in range(len(Qs))}
     for i in range(len(Qs)):
         elem = _PERIODIC_TABLE.GetElementSymbol(int(xyz['at_num'][i]))
