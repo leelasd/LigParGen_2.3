@@ -127,16 +127,25 @@ def Boss2CharmmTorsion(bnd_df, num2opls, st_no, molecule_data, num2typ2symb):
 
     paired_ats, paired_dhd = pair_declared_torsions(molecule_data, ats)
 
-    dhd = np.array(paired_dhd)
-    dhd = dhd  # kcal to kj conversion
-    dhd = dhd / 2.0  # Komm = Vopls/2
-    dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
-    ats = np.array(paired_ats) - st_no
-    for i in range(len(ats)):
-        for j in range(len(ats[0])):
-            if ats[i][j] < 0:
-                ats[i][j] = 0
-    at_df = pd.DataFrame(ats, columns=['I', 'J', 'K', 'L'])
+    if len(paired_dhd) == 0:
+        # A molecule with no torsions at all (e.g. water, or a bare
+        # monatomic ion) makes paired_dhd/paired_ats empty lists --
+        # np.array([]) has shape (0,), which pd.DataFrame(..., columns=[4
+        # names]) can't reshape into, so build the (correctly empty)
+        # DataFrames directly instead of through the array conversion.
+        dhd_df = pd.DataFrame(columns=['V1', 'V2', 'V3', 'V4'])
+        at_df = pd.DataFrame(columns=['I', 'J', 'K', 'L'])
+    else:
+        dhd = np.array(paired_dhd)
+        dhd = dhd  # kcal to kj conversion
+        dhd = dhd / 2.0  # Komm = Vopls/2
+        dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
+        ats = np.array(paired_ats) - st_no
+        for i in range(len(ats)):
+            for j in range(len(ats[0])):
+                if ats[i][j] < 0:
+                    ats[i][j] = 0
+        at_df = pd.DataFrame(ats, columns=['I', 'J', 'K', 'L'])
     final_df = pd.concat([dhd_df, at_df], axis=1)
     final_df = final_df.reindex(at_df.index)
     bndlist = list(bnd_df.UR) + (list(bnd_df.UR))
