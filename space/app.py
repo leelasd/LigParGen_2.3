@@ -574,6 +574,20 @@ CSS = """
   font-size: 1rem;
   line-height: 1.6;
 }
+.app-about { max-width: 46rem; margin-top: 0.35rem; }
+.app-about p {
+  color: var(--body-text-color-subdued);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin-bottom: 0.6rem;
+}
+.app-about p:last-child { margin-bottom: 0; }
+.app-about a {
+  color: var(--body-text-color-subdued);
+  text-decoration: underline;
+  text-decoration-color: var(--border-color-primary);
+}
+.app-about a:hover { color: var(--primary-600); text-decoration-color: var(--primary-600); }
 .section-label p {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 1.05rem;
@@ -621,6 +635,32 @@ CSS = """
 """
 
 
+# Same "about" text as the original Yale webserver, with the CLI/issues
+# links pointed at this repo instead of the original site's own pages.
+ABOUT_MD = """
+LigParGen is a web-based service that provides force field (FF) parameters
+for organic molecules or ligands, offered by the Jorgensen group.
+
+LigParGen provides bond, angle, dihedral, and Lennard-Jones OPLS-AA
+parameters with 1.14\\*CM1A or 1.14\\*CM1A-LBCC partial atomic charges.
+
+Server provides parameter and topology files for commonly used molecular
+dynamics and Monte Carlo packages OpenMM, Gromacs, NAMD, CHARMM, LAMMPS,
+TINKER, CNS/X-PLOR, Q, DESMOND, BOSS and MCPRO. Also, the PQR file is
+generated.
+
+Supported input formats: SMILES, MOL and PDB.
+
+Maximum ligand size allowed is 200 atoms.
+
+Check [this link](https://github.com/leelasd/LigParGen_2.3) to use
+LigParGen software from command-line in your local computer.
+
+Please, report any issue on the
+[LigParGen issues](https://github.com/leelasd/LigParGen_2.3/issues) page.
+"""
+
+
 # Same citations as the CLI's own --help text (LigParGen/Converter.py) plus
 # the core OPLS-AA potential paper, reproduced here for the web UI in place
 # of the original webserver's References section.
@@ -652,6 +692,7 @@ def build_ui():
             "OPLS-AA/CM1A force-field parameter generator for organic ligands.",
             elem_classes="app-subtitle",
         )
+        gr.Markdown(ABOUT_MD, elem_classes="app-about")
 
         with gr.Row():
             with gr.Column():
