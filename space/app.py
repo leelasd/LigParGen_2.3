@@ -331,9 +331,9 @@ CSS = """
 """
 
 
-# Same three citations as the CLI's own --help text (LigParGen/Converter.py),
-# reproduced here for the web UI in place of the original webserver's
-# References section.
+# Same citations as the CLI's own --help text (LigParGen/Converter.py) plus
+# the core OPLS-AA potential paper, reproduced here for the web UI in place
+# of the original webserver's References section.
 REFERENCES_MD = """
 1. Dodda, L. S.; Cabeza de Vaca, I.; Tirado-Rives, J.; Jorgensen, W. L.
    **LigParGen web server: an automatic OPLS-AA parameter generator for
@@ -347,6 +347,11 @@ REFERENCES_MD = """
    **Accuracy of free energies of hydration using CM1 and CM3 atomic
    charges.** *J. Comput. Chem.* **2004**, *25*, 1322-1332.
    [doi:10.1002/jcc.20059](https://doi.org/10.1002/jcc.20059)
+4. Jorgensen, W. L.; Tirado-Rives, J.
+   **Potential energy functions for atomic-level simulations of water and
+   organic and biomolecular systems.** *Proc. Natl. Acad. Sci. USA* **2005**,
+   *102*, 6665-6670.
+   [doi:10.1073/pnas.0408037102](https://doi.org/10.1073/pnas.0408037102)
 """
 
 
