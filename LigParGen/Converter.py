@@ -148,7 +148,8 @@ def convert(**kwargs):
     # assert (which('obabel')
             # is not None), "OpenBabel is Not installed or \n the executable location is not accessable"
     if os.path.exists('/tmp/' + resname + '.xml'):
-        os.system('/bin/rm /tmp/' + resname + '.*')
+        for stale_file in glob.glob('/tmp/' + resname + '.*'):
+            os.remove(stale_file)
     if lbcc:
         if charge == 0:
             lbcc = True
@@ -162,11 +163,11 @@ def convert(**kwargs):
         optim = 0
         lbcc = False
         a0,rd,pt = LoadModel()
-        os.system('cp  %s /tmp/'%qorca)
+        shutil.copy(qorca, '/tmp/')
         os.chdir('/tmp/')
         data_cm5 = GetLogFile(qorca,pt,rd)
         qcm5 = HirshfeldToCM5(data_cm5,a0,netcharge=charge)
-        os.system('cp inp_orca.pdb /tmp/%s.pdb' %resname)
+        shutil.copyfile('inp_orca.pdb', '/tmp/%s.pdb' % resname)
         pdb = '%s.pdb'%resname
 
     if smiles != None and pdb != None:
@@ -200,7 +201,7 @@ def convert(**kwargs):
         mol = BOSSReader('%s.z' % resname, optim, charge, lbcc)
 #        clu = True
     elif zmat != None:
-        os.system('cp %s /tmp/%s.z' % (zmat,resname))
+        shutil.copyfile(zmat, '/tmp/%s.z' % resname)
         os.chdir('/tmp/')
         print('THIS OPTION IS FOR SUPPLYING OPLS-AA Z-matrices only')
         if optim > 0: 
@@ -213,9 +214,8 @@ def convert(**kwargs):
         mol = AddCM5Charges(mol,qcm5)
         CM5_file2zmat('%s.z' % resname, qcm5.CM5_final,
                       oname='/tmp/%s_CM5.z' % resname)
-        os.system('mv %s.z %s_CM1A.z' %
-                  (resname,resname))
-        os.system('mv %s_CM5.z %s.z' % (resname,resname))
+        os.replace('%s.z' % resname, '%s_CM1A.z' % resname)
+        os.replace('%s_CM5.z' % resname, '%s.z' % resname)
 
     assert (mol.MolData['TotalQ']['Reference-Solute'] ==
             charge), "PROPOSED CHARGE IS NOT POSSIBLE: SOLUTE MAY BE AN OPEN SHELL"

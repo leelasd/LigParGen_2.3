@@ -13,6 +13,7 @@ Created on Wed Jun 14 2017
 import LigParGen
 import subprocess
 import os
+import shutil
 import numpy as np
 from LigParGen.Vector_algebra import pairing_func, angle, dihedral, tor_id, ang_id,bossElement2Num, Distance
 import itertools
@@ -83,15 +84,15 @@ def GenMolRep(ifile,optim,resid,charge):
         print('Warning!!\n 1.Cannonicalising Input MOL/PDB file\n 2.Atom ordering may change \n 3.But the Coordinates remain the same')
         CanonicaliedZmat(ifile,optim,resid)
     Get_OPT('%s.z' % resid, optim, charge)
-    if os.path.exists('/tmp/clu.pdb'): os.system('/bin/rm /tmp/clu.pdb')
+    if os.path.exists('/tmp/clu.pdb'): os.remove('/tmp/clu.pdb')
     if iform[1] == 'pdb':
         if os.environ.get('MCPROdir') is not None:
             os.system('$MCPROdir/miscexec/clu -t:f=pdb %s.pdb -r %s.z -n:f=p /tmp/clu.pdb -m ma' % (iform[0], resid))
-        else: 
+        else:
             execfile = os.environ['BOSSdir'] + '/scripts/xSPM > /tmp/olog'
-            coma = execfile + ' ' + resid 
+            coma = execfile + ' ' + resid
             os.system(coma)
-            os.system('cp /tmp/plt.pdb /tmp/clu.pdb')
+            shutil.copyfile('/tmp/plt.pdb', '/tmp/clu.pdb')
     return(True)
 
 def Get_OPT(zmat, optim, charge):
@@ -109,11 +110,11 @@ def Get_OPT(zmat, optim, charge):
     execfile = execs[charge]
     coma = execfile + ' ' + zmat[:-2]
     os.system(coma)
-    os.system('cp sum %s' % (zmat))
+    shutil.copyfile('sum', zmat)
     execfile = os.environ['BOSSdir'] + '/scripts/xSPM > /tmp/olog'
     coma = execfile + ' ' + zmat[:-2]
     os.system(coma)
-    os.system('/bin/cp sum %s' % (zmat))
+    shutil.copyfile('sum', zmat)
     return (None)
 
 def ReadMolFile(mollines):
