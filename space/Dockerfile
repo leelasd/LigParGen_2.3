@@ -34,8 +34,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY --chown=user app.py .
 
+# Docker Spaces are opaque containers to the Hub -- SPACE_ID etc. are
+# injected automatically, but Gradio's own get_space() (gradio/utils.py)
+# only reads them when SYSTEM=spaces is also set, which the Hub only sets
+# for its own managed sdk: gradio/streamlit builds. Without this, Gradio
+# doesn't know it's Space-hosted (config's space_id/is_space stay None),
+# which is also why this Space didn't get the Hub's "Agents" button --
+# that feature correlates the running app back to its Space repo the same
+# way.
 ENV GRADIO_SERVER_NAME=0.0.0.0 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    SYSTEM=spaces
 EXPOSE 7860
 
 CMD ["python", "app.py"]
