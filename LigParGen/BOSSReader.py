@@ -1,5 +1,6 @@
 from __future__ import print_function
 import os
+import shutil
 import numpy as np
 from LigParGen.mol_boss import new_mol_info
 import pandas as pd
@@ -303,17 +304,17 @@ class BOSSReader(object):
                 execfile = execs[charge]
                 coma = execfile + ' ' + self.zmat[:-2]
                 os.system(coma)
-                os.system('cp sum %s' % (self.zmat))
-                execfile = execs['OPT'] 
+                shutil.copyfile('sum', self.zmat)
+                execfile = execs['OPT']
                 coma = execfile + ' ' + self.zmat[:-2]
                 os.system(coma)
-                os.system('cp sum %s' % (self.zmat))
+                shutil.copyfile('sum', self.zmat)
                 os.system('head -1 %s'% (self.zmat))
                 #os.system('cd /tmp;/bin/cp sum %s' % (self.zmat))
         execfile = os.environ['BOSSdir'] + '/scripts/xSPM > /tmp/olog'
         coma = execfile + ' ' + self.zmat[:-2]
         os.system(coma)
-        os.system('cd /tmp;/bin/cp sum %s' % (self.zmat))
+        shutil.copyfile('/tmp/sum', '/tmp/' + self.zmat)
         return (None)
 
     def get_addihed(self, data):
@@ -443,7 +444,10 @@ class BOSSReader(object):
         return np.array(cha.QBCC), lbcc_qdat
 
     def cleanup(self):
-        os.system('cd /tmp;/bin/rm sum log olog out plt.pdb')
+        for fname in ('sum', 'log', 'olog', 'out', 'plt.pdb'):
+            fpath = os.path.join('/tmp', fname)
+            if os.path.exists(fpath):
+                os.remove(fpath)
 
     def get_ImpDat(self, optim, charge):
         self.Get_OPT(optim, charge)
@@ -513,9 +517,8 @@ class BOSSReader(object):
             lbcc_MD['Q_LJ'] = DATA_Q_LJ
             BCC_file2zmat(self.zmat, QLBCC,
                           oname='/tmp/%s_BCC.z' % self.zmat[:-2])
-            os.system('mv %s.z %s_NO_LBCC.z' %
-                      (self.zmat[:-2], self.zmat[:-2]))
-            os.system('mv %s_BCC.z %s.z' % (self.zmat[:-2], self.zmat[:-2]))
+            os.replace('%s.z' % self.zmat[:-2], '%s_NO_LBCC.z' % self.zmat[:-2])
+            os.replace('%s_BCC.z' % self.zmat[:-2], '%s.z' % self.zmat[:-2])
             self.MolData = lbcc_MD
         elif lbcc and (charge != 0):
             print('LBCC IS SUPPORTED ONLY FOR NEUTRAL MOLECULES')
