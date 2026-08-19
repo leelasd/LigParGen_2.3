@@ -162,13 +162,14 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
 
 
 KETCHER_HTML = """
-<div id="loading" style="display:flex;justify-content:center;align-items:center">
-<p style="padding:0.2rem 1rem 0 0;color:#888; font-size:1rem">loading structure editor</p>
+<div id="loading" style="display:flex;justify-content:center;align-items:center;height:420px">
+<p style="color:#8a8272;font-size:0.9rem;font-family:'IBM Plex Mono',ui-monospace,monospace">loading structure editor&hellip;</p>
 </div>
-<div id="root" style="height:420px"></div>
+<div id="root" style="height:420px;border:1px solid #e7e1d3;border-radius:10px;overflow:hidden"></div>
 <button id="ketcher-use-btn" type="button"
-        style="width:100%;margin-top:8px;padding:8px;border-radius:6px;border:none;
-               background:#4b5563;color:white;cursor:pointer;font-size:1rem">
+        style="width:100%;margin-top:10px;padding:10px 16px;border-radius:8px;border:1px solid #4f46e5;
+               background:#4f46e5;color:#fff;font-family:inherit;font-weight:600;font-size:0.92rem;
+               cursor:pointer;transition:background 0.15s ease,border-color 0.15s ease">
   Use drawn structure
 </button>
 """
@@ -212,48 +213,154 @@ async () => {
 }
 """
 
+# Gradio defaults to the visitor's OS/browser color-scheme preference, which
+# put this page in dark mode for anyone with dark mode on. That broke Ketcher
+# specifically: its toolbar SVG icons use `fill: currentColor` with no color
+# of their own, so they inherited Gradio's near-white dark-mode body text
+# color and rendered almost invisible against Ketcher's own light toolbar
+# chrome (confirmed live: computed icon color rgb(244,244,245) on a white
+# toolbar). Force light mode via Gradio's built-in `__theme` query param --
+# simpler and more robust than chasing every inherited color it broke.
+FORCE_LIGHT_JS = """
+() => {
+  const url = new URL(window.location);
+  if (url.searchParams.get('__theme') !== 'light') {
+    url.searchParams.set('__theme', 'light');
+    window.location.replace(url.href);
+  }
+}
+"""
+
+THEME = gr.themes.Base(
+    primary_hue=gr.themes.colors.indigo,
+    secondary_hue=gr.themes.colors.teal,
+    neutral_hue=gr.themes.colors.stone,
+    font=[gr.themes.GoogleFont("Public Sans"), "ui-sans-serif", "system-ui", "sans-serif"],
+    font_mono=[gr.themes.GoogleFont("IBM Plex Mono"), "ui-monospace", "SFMono-Regular", "monospace"],
+).set(
+    body_background_fill="*neutral_50",
+    background_fill_primary="white",
+    block_background_fill="white",
+    block_border_color="*neutral_200",
+    block_label_text_color="*neutral_500",
+    block_title_text_color="*neutral_800",
+    body_text_color="*neutral_800",
+    body_text_color_subdued="*neutral_500",
+    border_color_primary="*neutral_200",
+    button_primary_background_fill="*primary_600",
+    button_primary_background_fill_hover="*primary_700",
+    button_primary_text_color="white",
+    button_secondary_background_fill="white",
+    button_secondary_background_fill_hover="*neutral_50",
+    button_secondary_border_color="*neutral_300",
+    button_secondary_text_color="*neutral_800",
+    input_background_fill="white",
+    input_border_color="*neutral_300",
+    input_border_color_focus="*primary_500",
+)
+
+CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,500;0,600;1,500&display=swap');
+
+#app-header .app-kicker {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--body-text-color-subdued);
+  margin: 0 0 0.35rem 0;
+}
+#app-header h1 {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-style: italic;
+  font-weight: 500;
+  font-size: 2.4rem;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.app-subtitle { max-width: 46rem; }
+.app-subtitle p {
+  color: var(--body-text-color-subdued);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+.section-label p {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--body-text-color-subdued);
+  border-bottom: 1px solid var(--border-color-primary);
+  padding-bottom: 0.6rem;
+  margin-bottom: 0 !important;
+}
+.panel {
+  border-radius: var(--radius-lg) !important;
+  padding: 1.1rem !important;
+}
+#smiles_box textarea, #status_box textarea {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace !important;
+}
+
+/* Belt-and-braces alongside FORCE_LIGHT_JS above: pin Ketcher's own DOM to
+   light regardless of the page's color scheme, since its bundle assumes a
+   light host and inherited color is otherwise how it broke in the first
+   place. */
+#ketcher-panel, #ketcher-panel * { color: #1a1a1a; }
+#ketcher-panel { color-scheme: light; }
+#ketcher-panel #ketcher-use-btn:hover { background: #4338ca !important; border-color: #4338ca !important; }
+"""
+
+
 def build_ui():
-    with gr.Blocks(title="LigParGen") as demo:
-        gr.Markdown("# LigParGen\nOPLS-AA/CM1A force-field parameter generator for organic ligands.")
+    with gr.Blocks(title="LigParGen", theme=THEME, css=CSS) as demo:
+        gr.Markdown('<p class="app-kicker">OPLS-AA / CM1A &middot; BOSS</p>\n\n# LigParGen', elem_id="app-header")
+        gr.Markdown(
+            "OPLS-AA/CM1A force-field parameter generator for organic ligands.",
+            elem_classes="app-subtitle",
+        )
 
         with gr.Row():
             with gr.Column():
-                gr.Markdown("### Step 1: Input structure")
-                smiles_box = gr.Textbox(
-                    label="SMILES", placeholder="Enter SMILES, e.g. c1ccccc1", elem_id="smiles_box"
-                )
-                gr.Button("Sample: Benzene").click(
-                    lambda: "c1ccccc1", inputs=None, outputs=smiles_box
-                )
+                gr.Markdown("Step 1 &mdash; Input structure", elem_classes="section-label")
+                with gr.Group(elem_classes="panel"):
+                    smiles_box = gr.Textbox(
+                        label="SMILES", placeholder="Enter SMILES, e.g. c1ccccc1", elem_id="smiles_box"
+                    )
+                    gr.Button("Sample: Benzene", size="sm").click(
+                        lambda: "c1ccccc1", inputs=None, outputs=smiles_box
+                    )
 
-                gr.Markdown("**Or draw a structure:**")
-                ketcher_html = gr.HTML(KETCHER_HTML)
+                    gr.Markdown("**Or draw a structure:**")
+                    ketcher_html = gr.HTML(KETCHER_HTML, elem_id="ketcher-panel")
 
-                gr.Markdown(
-                    "**Or upload a MOL/PDB file:** MOL files must include all "
-                    "hydrogens. For a PDB upload, also supply the SMILES above "
-                    "-- it's used to fix bond orders and add any missing "
-                    "hydrogens (PDB files don't encode bond order and are "
-                    "often missing Hs)."
-                )
-                upload = gr.File(label="MOL or PDB file", file_types=[".mol", ".pdb"])
+                    gr.Markdown(
+                        "**Or upload a MOL/PDB file:** MOL files must include all "
+                        "hydrogens. For a PDB upload, also supply the SMILES above "
+                        "-- it's used to fix bond orders and add any missing "
+                        "hydrogens (PDB files don't encode bond order and are "
+                        "often missing Hs)."
+                    )
+                    upload = gr.File(label="MOL or PDB file", file_types=[".mol", ".pdb"])
 
-                gr.Markdown("### Step 2: Options")
-                opt_iters = gr.Dropdown(["0", "1", "2", "3"], value="0", label="Molecule optimization iterations")
-                charge_model = gr.Radio(
-                    ["1.14*CM1A-LBCC (neutral molecules)", "1.14*CM1A (neutral or charged)"],
-                    value="1.14*CM1A-LBCC (neutral molecules)",
-                    label="Charge model",
-                )
-                charge = gr.Dropdown(["0", "-1", "-2", "1", "2"], value="0", label="Molecule charge")
+                gr.Markdown("Step 2 &mdash; Options", elem_classes="section-label")
+                with gr.Group(elem_classes="panel"):
+                    opt_iters = gr.Dropdown(["0", "1", "2", "3"], value="0", label="Molecule optimization iterations")
+                    charge_model = gr.Radio(
+                        ["1.14*CM1A-LBCC (neutral molecules)", "1.14*CM1A (neutral or charged)"],
+                        value="1.14*CM1A-LBCC (neutral molecules)",
+                        label="Charge model",
+                    )
+                    charge = gr.Dropdown(["0", "-1", "-2", "1", "2"], value="0", label="Molecule charge")
 
-                submit = gr.Button("Submit Molecule", variant="primary")
+                    submit = gr.Button("Submit Molecule", variant="primary")
 
             with gr.Column():
-                gr.Markdown("### Results")
-                status = gr.Textbox(label="Status", interactive=False)
-                output_zip = gr.File(label="Download all output formats (.zip)")
-                preview = Molecule3D(label="3D preview (optimized geometry)", reps=[{"style": "stick"}])
+                gr.Markdown("Results", elem_classes="section-label")
+                with gr.Group(elem_classes="panel"):
+                    status = gr.Textbox(label="Status", interactive=False, elem_id="status_box")
+                    output_zip = gr.File(label="Download all output formats (.zip)")
+                    preview = Molecule3D(label="3D preview (optimized geometry)", reps=[{"style": "stick"}])
 
         submit.click(
             run_ligpargen,
@@ -261,6 +368,7 @@ def build_ui():
             outputs=[output_zip, preview, status],
         )
 
+        demo.load(fn=None, inputs=None, outputs=None, js=FORCE_LIGHT_JS)
         demo.load(fn=None, inputs=None, outputs=None, js=KETCHER_LOAD_JS)
 
     demo.queue(default_concurrency_limit=1)
