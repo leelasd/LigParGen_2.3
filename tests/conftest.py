@@ -105,3 +105,11 @@ def his():
     injecting the ring's missing Additional Bonds/Angles -- see
     tests/fixtures/his/README.md for the full story."""
     return BossSections('his')
+
+
+# NOTE: tests/test_integration_converters.py (issue #24) deliberately
+# re-checks BOSS availability locally rather than importing it from here
+# (see that file's own comment) -- so no boss_available()/BOSS_AVAILABLE
+# helper is needed in this shared conftest; FIXTURES_DIR above already
+# covers both this file's captured-text fixtures and that file's
+# Docker/BOSS integration fixtures, since both live under tests/fixtures/.
