@@ -31,8 +31,30 @@ _Avoid_: charge model, charges (too generic — always name the specific scheme)
 The short identifier (e.g. `PHN`) that ties together a molecule's Zmatrix, its BOSS working files, and its converted output files. Supplied by the caller via the `-r` flag; analogous to a PDB residue name but scoped to a single LigParGen run, not a multi-residue structure.
 
 **Conformer clustering**:
-Grouping a set of candidate 3D geometries for a molecule and picking a representative one, done today via MCPRO's `clu` utility during PDB-input processing. Being replaced with an RDKit-based equivalent — MCPRO itself is being dropped as a dependency.
+Grouping a set of candidate 3D geometries for a molecule and picking a representative one. On the PDB input path, LigParGen already falls back to a BOSS-only single-geometry substitute when MCPRO's `clu` utility isn't available — see ADR-0002. No RDKit (or other) replacement is being built for this; that was an earlier plan superseded once the existing fallback was found to already work.
 
 **MCPRO**:
 BOSS's sibling program for free-energy perturbation / Monte Carlo work. Being fully dropped as a runtime dependency of LigParGen (its only current use is the `clu` conformer-clustering step). Note: the "MCPRO & BOSS Zmatrix" output format LigParGen can produce is just the shared `.z` file format — it does not invoke the MCPRO binary, and is unaffected by dropping MCPRO.
 _Avoid_: assuming any mention of "MCPRO" in the README/output-format list implies the binary is still needed — check whether it means the file format or the program.
+
+### Hugging Face Space (web front end)
+
+**Space**:
+A Hugging Face Space — the hosted app unit (git repo, build, and running app together). Distinct from `space/`, the subdirectory in this repo holding the Space's source.
+_Avoid_: "the app" alone — ambiguous with the LigParGen CLI/package itself
+
+**Space visibility**:
+One of three Hugging Face-defined access levels for a Space: **Public** (source, running app, and built image all fully open), **Protected** (source and image private to owner/collaborators, but the running app is still publicly reachable), **Private** (source, running app, and built image all restricted to owner/collaborators — 404s for anyone else, not listed in search). This project's Space starts at Private.
+
+**BOSS asset store**:
+The private Hugging Face Dataset repository holding a copy of the licensed BOSS install, fetched into the Space's container at startup using a Secret token. Never committed to this git repo, never baked into any Docker image layer — the hosted-deployment counterpart to ADR-0001's local-build-time rule.
+_Avoid_: "the BOSS repo" — ambiguous with this GitHub repo
+
+**Secret** / **Variable** (Space configuration):
+Hugging Face Space configuration values. A **Secret** is a private credential — write-only once set, not copied to duplicated Spaces — used here to authenticate the BOSS asset store fetch. A **Variable** is a public, visible config value. Anything credential-shaped must be a Secret, never a Variable.
+
+**Draw-a-molecule input**:
+The alternate input path where a user sketches a 2D structure in an embedded editor instead of typing a SMILES string or uploading a file. Backed by the Ketcher editor (the real Yale site uses JSME instead — a deliberate deviation, not an oversight, since Ketcher already has a proven Gradio integration pattern to build on).
+
+**3D structure preview**:
+A rendered 3D view of the BOSS-optimized output geometry, shown before the result files are downloaded. Not present on the original Yale site — a genuine enhancement for this Space, backed by the `gradio_molecule3d` component.

@@ -13,19 +13,43 @@ Created on Wed Jun 14 2017
 import LigParGen
 import subprocess
 import os
+import shutil
 import numpy as np
 from LigParGen.Vector_algebra import pairing_func, angle, dihedral, tor_id, ang_id,bossElement2Num, Distance
 import itertools
 import collections
 import networkx as nx
+from openbabel import openbabel as ob
+from openbabel import pybel
+
+
+def _babel_gen3d(ifile, iform):
+    # Equivalent to `babel -i<fmt> <ifile> -omol <out>.mol --gen3D`: OBBuilder +
+    # MMFF94 minimization + weighted-rotor conformer search, same OBOp the CLI runs.
+    # pybel.Molecule.make3D() is NOT equivalent (skips the conformer search).
+    mol = pybel.readstring(iform[1], open(ifile).read())
+    gen3d = ob.OBOp.FindType("Gen3D")
+    gen3d.Do(mol.OBMol, "")
+    mol.write("mol", "%s.mol" % iform[0], overwrite=True)
+
 
 def AsitIsZmat(ifile,optim,resid):
     iform = ifile.split('.')
     # CREATE A MOL FILE FROM ANY FILE
     if iform[1] == 'smi':
-        os.system('babel -i%s %s -omol %s.mol --gen3D' % (iform[1], ifile, iform[0]))
+        _babel_gen3d(ifile, iform)
     else:
-        os.system('babel -i%s %s -omol %s.mol ---errorlevel 1 -b &>LL' % (iform[1], ifile, iform[0]))
+        # Equivalent to `babel -i<fmt> <ifile> -omol <out>.mol --errorlevel 1 -b`:
+        # critical-errors-only logging + dative-bond normalization.
+        ob.obErrorLog.SetOutputLevel(ob.obError)
+        conv = ob.OBConversion()
+        conv.SetInAndOutFormats(iform[1], "mol")
+        obmol = ob.OBMol()
+        conv.ReadFile(obmol, ifile)
+        dative = ob.OBOp.FindType("b")
+        if dative is not None:
+            dative.Do(obmol, "")
+        conv.WriteFile(obmol, "%s.mol" % iform[0])
     mollines = open(iform[0] + '.mol', 'r').readlines()
     COOS, ATYPES, MolBonds = ReadMolFile(mollines)
     G_mol, mol_icords = make_graphs(ATYPES, COOS, MolBonds)
@@ -36,9 +60,16 @@ def CanonicaliedZmat(ifile,optim,resid):
     iform = ifile.split('.')
     # CREATE A MOL FILE FROM ANY FILE
     if iform[1] == 'smi':
-        os.system('babel -i%s %s -omol %s.mol --gen3D' % (iform[1], ifile, iform[0]))
+        _babel_gen3d(ifile, iform)
     else:
-        os.system('babel -i%s %s -omol --canonical %s.mol' % (iform[1], ifile, iform[0]))
+        # Equivalent to `babel -i<fmt> <ifile> -omol --canonical <out>.mol`.
+        conv = ob.OBConversion()
+        conv.SetInAndOutFormats(iform[1], "mol")
+        obmol = ob.OBMol()
+        conv.ReadFile(obmol, ifile)
+        canon = ob.OBOp.FindType("canonical")
+        canon.Do(obmol, "")
+        conv.WriteFile(obmol, "%s.mol" % iform[0])
     mollines = open(iform[0] + '.mol', 'r').readlines()
     COOS, ATYPES, MolBonds = ReadMolFile(mollines)
     G_mol, mol_icords = make_graphs(ATYPES, COOS, MolBonds)
@@ -53,15 +84,15 @@ def GenMolRep(ifile,optim,resid,charge):
         print('Warning!!\n 1.Cannonicalising Input MOL/PDB file\n 2.Atom ordering may change \n 3.But the Coordinates remain the same')
         CanonicaliedZmat(ifile,optim,resid)
     Get_OPT('%s.z' % resid, optim, charge)
-    if os.path.exists('/tmp/clu.pdb'): os.system('/bin/rm /tmp/clu.pdb')
+    if os.path.exists('/tmp/clu.pdb'): os.remove('/tmp/clu.pdb')
     if iform[1] == 'pdb':
         if os.environ.get('MCPROdir') is not None:
             os.system('$MCPROdir/miscexec/clu -t:f=pdb %s.pdb -r %s.z -n:f=p /tmp/clu.pdb -m ma' % (iform[0], resid))
-        else: 
+        else:
             execfile = os.environ['BOSSdir'] + '/scripts/xSPM > /tmp/olog'
-            coma = execfile + ' ' + resid 
+            coma = execfile + ' ' + resid
             os.system(coma)
-            os.system('cp /tmp/plt.pdb /tmp/clu.pdb')
+            shutil.copyfile('/tmp/plt.pdb', '/tmp/clu.pdb')
     return(True)
 
 def Get_OPT(zmat, optim, charge):
@@ -79,11 +110,11 @@ def Get_OPT(zmat, optim, charge):
     execfile = execs[charge]
     coma = execfile + ' ' + zmat[:-2]
     os.system(coma)
-    os.system('cp sum %s' % (zmat))
+    shutil.copyfile('sum', zmat)
     execfile = os.environ['BOSSdir'] + '/scripts/xSPM > /tmp/olog'
     coma = execfile + ' ' + zmat[:-2]
     os.system(coma)
-    os.system('/bin/cp sum %s' % (zmat))
+    shutil.copyfile('sum', zmat)
     return (None)
 
 def ReadMolFile(mollines):
@@ -115,27 +146,45 @@ def make_graphs(atoms, coos, bonds):
     for (i, j, rij) in zip(bonds['BI'], bonds['BJ'], bonds['RIJ']):
         G.add_edge(i, j, distance=rij)
         G.add_edge(j, i, distance=rij)
-    all_ps = dict(nx.algorithms.all_pairs_shortest_path_length(G))
-    all_paths = []
-    for s in all_ps.keys():
-        for e in all_ps[s].keys():
-#            if   all_ps[s][e] == 1: all_paths+=list(nx.algorithms.shortest_simple_paths(G,s,e)) 
-#            elif all_ps[s][e] == 2: all_paths+=list(nx.algorithms.shortest_simple_paths(G,s,e)) 
-#            elif all_ps[s][e] == 3: all_paths+=list(nx.algorithms.shortest_simple_paths(G,s,e)) 
-            if   all_ps[s][e] == 1: all_paths+=list(nx.algorithms.all_simple_paths(G,s,e,cutoff=1))
-            elif all_ps[s][e] == 2: all_paths+=list(nx.algorithms.all_simple_paths(G,s,e,cutoff=2))
-            elif all_ps[s][e] == 3: all_paths+=list(nx.algorithms.all_simple_paths(G,s,e,cutoff=3))
-
-    all_bonds = [p for p in all_paths if len(set(p))==2]
-    new_angs =  [p for p in all_paths if len(set(p))==3]
-    new_tors =  [p for p in all_paths if len(set(p))==4]
+    # Enumerate bonds/angles/torsions by walking direct neighbors of each
+    # node/edge instead of the previous all_pairs_shortest_path_length +
+    # all_simple_paths(cutoff=1/2/3) approach. That O(N^2) pair-enumeration
+    # also had a latent correctness gap on small rings (3-/4-/5-membered):
+    # classifying a triple/quadruple by the graph-wide shortest-path
+    # distance between its endpoints silently dropped angles/torsions
+    # whenever a shortcut existed around the other side of the ring (e.g.
+    # a bare 3-membered ring produced zero angles, since every pair of
+    # atoms in a triangle is mutually 1 bond apart). Walking directly from
+    # each node's (for angles) or each edge's (for torsions) neighbors,
+    # exactly as expand_zmat.py's validated _complete_internals() does,
+    # sidesteps that: it enumerates every angle/torsion that is actually
+    # implied by the local connectivity, independent of shortcuts
+    # elsewhere in the graph.
+    all_bonds = [list(e) for e in G.edges()]
+    new_angs = []
+    for j in G.nodes():
+        neigh = list(G.neighbors(j))
+        for a in range(len(neigh)):
+            for b in range(len(neigh)):
+                if a == b:
+                    continue
+                new_angs.append([neigh[a], j, neigh[b]])
+    new_tors = []
+    for j, k in G.edges():
+        for i in G.neighbors(j):
+            if i == k:
+                continue
+            for l in G.neighbors(k):
+                if l == j or l == i:
+                    continue
+                new_tors.append([i, j, k, l])
     dict_new_tors = {tor_id(t): t for t in new_tors}
     dict_new_angs = {ang_id(t): t for t in new_angs}
     imp_keys = [n for n in G.nodes() if G.degree(n) / 2 == 3]
     all_imps = {}
     for i in imp_keys:
         nei = list(G.neighbors(i))
-        if G.node[i]['atno'] == 6:
+        if G.nodes[i]['atno'] == 6:
             all_imps[i] = [nei[0], i, nei[1], nei[2]]
     MOL_ICOORDS = {'BONDS': all_bonds,
                    'ANGLES': dict_new_angs, 'TORSIONS': dict_new_tors, 'IMPROPERS': all_imps}
@@ -180,7 +229,7 @@ def print_ZMAT(atoms, G_mol, mol_icords, coos, zmat_name, resid):
     for i in range(1, len(atoms) + 1):
         Z_ATOMS[i + 2] = atoms[i]
     for i in range(1, len(atoms) + 1):
-        Z_NO[i + 2] = G_mol.node[i]['atno']
+        Z_NO[i + 2] = G_mol.nodes[i]['atno']
     n_ats = 0
     B_LINK = {}
     for i in G_mol.nodes():

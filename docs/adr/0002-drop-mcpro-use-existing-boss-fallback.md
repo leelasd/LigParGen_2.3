@@ -1,0 +1,5 @@
+# Drop MCPRO; rely on its existing BOSS-only fallback, no RDKit replacement
+
+LigParGen's only runtime use of MCPRO is conformer clustering via `$MCPROdir/miscexec/clu` in `CreatZmat.py`, gated behind `if iform[1] == 'pdb'` — it never runs for SMILES or MOL input. MCPRO is proprietary like BOSS (same licensing constraints as ADR-0001), so we're dropping it entirely.
+
+Unlike our first read of this (an earlier draft of this ADR proposed an RDKit-based replacement), the code already has a working fallback: when `$MCPROdir` is unset, `CreatZmat.py` runs BOSS's own `xSPM` script and copies its `plt.pdb` output to `clu.pdb` instead of calling MCPRO's `clu`. Since MCPRO is being dropped, `$MCPROdir` is simply never set, and this existing branch runs automatically — no new clustering code is needed. The trade-off: for PDB input, BOSS's single optimized geometry (`plt.pdb`) is a lower-fidelity substitute for MCPRO's clustering across multiple MC-sampled conformers. That's an accepted quality gap on the PDB input path only; it doesn't touch the SMILES→OpenMM/GROMACS path this effort's regression suite covers.

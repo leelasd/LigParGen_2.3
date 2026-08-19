@@ -1,5 +1,6 @@
 from __future__ import print_function
 import os
+import shutil
 import numpy as np
 from LigParGen.mol_boss import new_mol_info
 import pandas as pd
@@ -25,7 +26,7 @@ def LinCheck(fname):
         if 'Geometry Variations follow ' in zlines[l]: imp_dat = l
     Atypes = []
     for l in zlines[1:imp_dat]:Atypes.append(l.split()[2])
-    Atypes = np.array(Atypes,dtype=np.int)
+    Atypes = np.array(Atypes,dtype=int)
     Atypes = Atypes[Atypes<0]
     Check =False
     if len(Atypes)>2: Check = True
@@ -274,6 +275,113 @@ def Refine_file(fname):
     return lines
 
 
+# banner text -> impDat key(s) it is expected to set. Module-level (not
+# inline in get_ImpDat) so tests can locate section boundaries in captured
+# BOSS out/sum text without needing a real BOSS install -- see
+# tests/conftest.py, which calls find_boss_sections() directly rather than
+# keeping its own copy of this banner list (a prior hand-copied duplicate
+# risked silently desyncing from this one).
+ODAT_BANNERS = [
+    ('Z-Matrix for Reference Solutes', ['ATMinit']),
+    ('Net Charge', ['TotalQ']),
+    ('OPLS Force Field Parameters', ['ATMfinal', 'NBDinit']),
+    ('Fourier Coefficients', ['TORinit', 'NBDfinal']),
+    ('Bond Stretching Parameters', ['TORfinal', 'BNDinit']),
+    ('Angle Bending Parameters', ['BNDfinal', 'ANGinit']),
+    ('Non-bonded Pairs List', ['ANGfinal', 'PAIRinit']),
+    ('Solute 0:   X          Y          Z', ['XYZinit']),
+    ('Atom I      Atom J      RIJ', ['XYZfinal']),
+    ('Checking', ['PAIRfinal']),
+]
+SDAT_BANNERS = [
+    ('Additional Dihedrals follow', ['ADDinit']),
+    ('Domain Definitions follow', ['ADDfinal']),
+]
+
+
+def find_boss_sections(odat, sdat, zmat_name='<zmat>'):
+    """Locate every BOSS out/sum section boundary get_ImpDat() needs, by
+    banner-text match, and fail loudly (naming the missing banner, or an
+    empty/truncated section) instead of a bare KeyError or bad slice far
+    away from the actual cause."""
+    impDat = {}
+    for nl in range(len(odat)):
+        if 'Z-Matrix for Reference Solutes' in odat[nl]:
+            impDat['ATMinit'] = nl
+        elif 'Net Charge' in odat[nl]:
+            impDat['TotalQ'] = nl
+        elif 'OPLS Force Field Parameters' in odat[nl]:
+            impDat['ATMfinal'] = nl
+            impDat['NBDinit'] = nl
+        elif 'Fourier Coefficients' in odat[nl]:
+            impDat['TORinit'] = nl
+            impDat['NBDfinal'] = nl
+        elif 'Bond Stretching Parameters' in odat[nl]:
+            impDat['TORfinal'] = nl
+            impDat['BNDinit'] = nl
+        elif 'Angle Bending Parameters' in odat[nl]:
+            impDat['BNDfinal'] = nl
+            impDat['ANGinit'] = nl
+        elif 'Non-bonded Pairs List' in odat[nl]:
+            impDat['ANGfinal'] = nl
+            impDat['PAIRinit'] = nl
+        elif 'Solute 0:   X          Y          Z' in odat[nl]:
+            impDat['XYZinit'] = nl
+        elif 'Atom I      Atom J      RIJ' in odat[nl]:
+            impDat['XYZfinal'] = nl
+        elif 'Checking' in odat[nl]:
+            impDat['PAIRfinal'] = nl
+#### THIS PART IS READ FROM SUM FILE ###
+    for ml in range(len(sdat)):
+        if 'Additional Dihedrals follow' in sdat[ml]:
+            impDat['ADDinit'] = ml
+        elif 'Domain Definitions follow' in sdat[ml]:
+            impDat['ADDfinal'] = ml
+#### THIS PART IS READ FROM SUM FILE ###
+
+    missing_banners = [
+        banner for banner, keys in ODAT_BANNERS + SDAT_BANNERS
+        if any(key not in impDat for key in keys)
+    ]
+    if missing_banners:
+        raise ValueError(
+            "BOSSReader (%s): could not locate the following expected "
+            "section banner(s) in the BOSS output (/tmp/out or "
+            "/tmp/sum): %s. The BOSS run may have failed, or its output "
+            "format has changed." % (
+                zmat_name, ', '.join(repr(b) for b in missing_banners)))
+
+    # Sections that must contain at least one line of content once the
+    # banner-derived start/end indices are used to slice odat below.
+    # ('Additional Dihedrals' is intentionally excluded: an empty block
+    # there just means the solute has no additional dihedrals, which is
+    # normal.)
+    non_empty_sections = [
+        ('ATOMS', 'ATMinit', 'ATMfinal'),
+        ('Q_LJ (non-bonded)', 'NBDinit', 'NBDfinal'),
+        ('BONDS', 'BNDinit', 'BNDfinal'),
+        ('ANGLES', 'ANGinit', 'ANGfinal'),
+        ('TORSIONS', 'TORinit', 'TORfinal'),
+        ('XYZ', 'XYZinit', 'XYZfinal'),
+        ('PAIRS', 'PAIRinit', 'PAIRfinal'),
+    ]
+    for name, start_key, end_key in non_empty_sections:
+        start, end = impDat[start_key], impDat[end_key]
+        if end <= start:
+            raise ValueError(
+                "BOSSReader (%s): the '%s' section of the BOSS output "
+                "is empty or out of order (lines %d:%d) -- the output "
+                "may be malformed." % (zmat_name, name, start, end))
+
+    if impDat['TotalQ'] + 4 > len(odat):
+        raise ValueError(
+            "BOSSReader (%s): the 'Net Charge' section is truncated -- "
+            "expected 4 lines starting at line %d but /tmp/out only has "
+            "%d lines." % (zmat_name, impDat['TotalQ'], len(odat)))
+
+    return impDat
+
+
 class BOSSReader(object):
 
     def __init__(self, zmatrix, optim, charge=0, lbcc=False):
@@ -303,17 +411,17 @@ class BOSSReader(object):
                 execfile = execs[charge]
                 coma = execfile + ' ' + self.zmat[:-2]
                 os.system(coma)
-                os.system('cp sum %s' % (self.zmat))
-                execfile = execs['OPT'] 
+                shutil.copyfile('sum', self.zmat)
+                execfile = execs['OPT']
                 coma = execfile + ' ' + self.zmat[:-2]
                 os.system(coma)
-                os.system('cp sum %s' % (self.zmat))
+                shutil.copyfile('sum', self.zmat)
                 os.system('head -1 %s'% (self.zmat))
                 #os.system('cd /tmp;/bin/cp sum %s' % (self.zmat))
         execfile = os.environ['BOSSdir'] + '/scripts/xSPM > /tmp/olog'
         coma = execfile + ' ' + self.zmat[:-2]
         os.system(coma)
-        os.system('cd /tmp;/bin/cp sum %s' % (self.zmat))
+        shutil.copyfile('/tmp/sum', '/tmp/' + self.zmat)
         return (None)
 
     def get_addihed(self, data):
@@ -336,9 +444,30 @@ class BOSSReader(object):
 
     def get_charge(self, data):
         TotQ = {}
-        for line in data[1:]:
+        # get_ImpDat() hands this a fixed 4-line window (banner + Reference
+        # Solute + 1st/2nd Perturbed Solute). Guard against a truncated
+        # window (e.g. the banner sat too close to EOF) instead of silently
+        # parsing fewer charge entries than expected.
+        expected_lines = 4
+        if len(data) < expected_lines:
+            raise ValueError(
+                "get_charge(): expected a %d-line 'Net Charge' block (banner "
+                "+ 3 solute charge lines) but only got %d line(s) -- BOSS "
+                "output may be truncated." % (expected_lines, len(data)))
+        for line in data[1:expected_lines]:
             words = line.split()
-            TotQ['-'.join(words[:-1])] = round(float(words[-1]), 3)
+            try:
+                charge_val = round(float(words[-1]), 3)
+            except (IndexError, ValueError):
+                raise ValueError(
+                    "get_charge(): could not parse a net charge value from "
+                    "line %r" % line)
+            TotQ['-'.join(words[:-1])] = charge_val
+        if 'Reference-Solute' not in TotQ:
+            raise ValueError(
+                "get_charge(): 'Reference Solute' net charge line not found "
+                "in the parsed block (got: %s) -- downstream charge checks "
+                "would silently fail." % (list(TotQ.keys()),))
         return TotQ
 
     def get_tors(self, data):
@@ -351,6 +480,34 @@ class BOSSReader(object):
                     if abs(float(tor)) > 0.0:
                         ntor = ntor + 1
         return (tors)
+
+    def get_tors_by_decl_idx(self, data):
+        """Same 'Fourier Coefficients' section as get_tors(), but keyed by
+        each row's own 'Angle' column (data[0]) -- BOSS's 1-based index
+        into the full declared-dihedral sequence (Variable Dihedrals
+        follow, then Additional Dihedrals follow, in that order) -- rather
+        than returned as a plain list.
+
+        This table is not guaranteed to have exactly one row per declared
+        dihedral quadruple: BOSS can skip a quadruple entirely if it can't
+        match its atom-type pattern against a known torsion type (observed
+        directly: declaring a ring's internal bonds/angles as Additional
+        entries makes BOSS re-derive more Additional Dihedrals than it
+        ends up tabulating rows for). Assuming row N of this table always
+        corresponds to the Nth declared quadruple -- what the plain list
+        from get_tors() invites -- silently mispairs coefficients to atoms
+        as soon as any row is skipped. The 'Angle' column sidesteps that:
+        it's BOSS's own declaration-order index, so row N's coefficients
+        can be matched to declared quadruple N directly, keyed lookup
+        instead of positional zip, correct even with skipped rows.
+        """
+        tors = {}
+        for line in data:
+            if 'All Solutes' in line:
+                fields = line.split()
+                decl_idx = int(fields[0])
+                tors[decl_idx] = fields[4:8]
+        return tors
 
     def get_QLJ(self, data):
         qlj = []
@@ -366,14 +523,30 @@ class BOSSReader(object):
         angs = {'cl1': [], 'cl2': [], 'cl3': [], 'R': [], 'K': []}
         nang = 0
         for line in data:
-            if line[0].isdigit() and float(line.split()[4]) > 0:
-                word = line.split()
-                angs['cl1'].append(int(word[0]))
-                angs['cl2'].append(int(word[1]))
-                angs['cl3'].append(int(word[2]))
-                angs['R'].append(float(word[3]))
-                angs['K'].append(float(word[4]))
-                nang = nang + 1
+            word = line.split()
+            # A real angle data row looks like:
+            #   Atom1 Atom2 Atom3  A0  K0  A1  K1  A2  K2  Delta  AtomTypes
+            # Header/banner lines don't have this shape (too few fields, or
+            # the leading fields aren't atom-index integers). Detecting rows
+            # this way -- instead of thresholding on K0's value -- means a
+            # genuine (if unusual) zero force constant is still kept rather
+            # than being silently treated as "not a data row".
+            if len(word) < 5:
+                continue
+            try:
+                cl1 = int(word[0])
+                cl2 = int(word[1])
+                cl3 = int(word[2])
+                r = float(word[3])
+                k = float(word[4])
+            except ValueError:
+                continue
+            angs['cl1'].append(cl1)
+            angs['cl2'].append(cl2)
+            angs['cl3'].append(cl3)
+            angs['R'].append(r)
+            angs['K'].append(k)
+            nang = nang + 1
             #        print 'Total No of Non-zero Angles in BOSS is %d' % (nang)
         return (angs)
 
@@ -397,15 +570,56 @@ class BOSSReader(object):
         for i in range(0, len(data)):
             if 'Atom' in data[i]:
                 plnos.append(i)
+        if not plnos:
+            raise ValueError(
+                "get_pairs(): could not find any 'Atom N:' markers in the "
+                "Non-bonded Pairs List section -- BOSS output may be "
+                "malformed or its banner text may have changed.")
+        natoms = len(plnos)
         plnos.append(len(data))
         pair_dat = {i: ' '.join(data[plnos[i]:plnos[i + 1]])
                     for i in range(len(plnos) - 1)}
-        for nu in range(len(plnos) - 1):
-            pair_dat[nu] = list(pair_dat[nu][10:].split())
+        for nu in range(natoms):
+            marker_line = data[plnos[nu]]
+            if ':' not in marker_line:
+                raise ValueError(
+                    "get_pairs(): expected an 'Atom N:' marker line but got "
+                    "%r" % marker_line)
+            colon_idx = marker_line.index(':')
+            # Strip exactly the 'Atom N:' prefix found on this line (whatever
+            # its width, e.g. 'Atom    5:' vs 'Atom   40:') instead of
+            # assuming a fixed 10-column offset. Cross-check the atom number
+            # in it against the sequential 1..natoms position this parser
+            # assumes -- if the markers aren't sequential, `nu` below would
+            # get silently paired with the wrong atom's exclusions.
+            try:
+                atom_label = int(
+                    marker_line[:colon_idx].replace('Atom', '').strip())
+            except ValueError:
+                raise ValueError(
+                    "get_pairs(): could not parse an atom number out of "
+                    "marker line %r" % marker_line)
+            if atom_label != nu + 1:
+                raise ValueError(
+                    "get_pairs(): 'Atom N:' markers in the Non-bonded Pairs "
+                    "List are not sequential (expected Atom %d, found Atom "
+                    "%d)" % (nu + 1, atom_label))
+            pair_dat[nu] = list(pair_dat[nu][colon_idx + 1:].split())
             pair_dat[nu] = np.array([int(a) - 2 for a in pair_dat[nu]])
         pairs = []
         for k in pair_dat.keys():
             for j in pair_dat[k]:
+                # Every parsed partner index should resolve to one of the
+                # natoms atoms this section describes -- a value outside
+                # that range means the (fixed-offset) column parsing above
+                # is misaligned, and should fail loudly here rather than
+                # produce a bogus pair entry silently.
+                if not (0 <= j < natoms):
+                    raise ValueError(
+                        "get_pairs(): parsed pair partner index %d for atom "
+                        "%d is out of range for a %d-atom Non-bonded Pairs "
+                        "List -- parsing may be misaligned." %
+                        (j, k, natoms))
                 pairs.append('%6d%6d%6d\n' % (k - 1, j, 1))
         return pairs
 
@@ -413,14 +627,32 @@ class BOSSReader(object):
         bnds = {'cl1': [], 'cl2': [], 'RIJ': [], 'KIJ': [], 'TIJ': []}
         nbnd = 0
         for line in data:
-            if line[0].isdigit() and float(line.split()[3]) > 0:
-                word = line.split()
-                bnds['cl1'].append(int(word[0]))
-                bnds['cl2'].append(int(word[1]))
-                bnds['RIJ'].append(float(word[2]))
-                bnds['KIJ'].append(float(word[3]))
-                bnds['TIJ'].append(line[-5:])
-                nbnd += 1
+            word = line.split()
+            # A real bond data row looks like:
+            #   Atom1 Atom2  R0  K0  R1  K1  R2  K2  Delta  AtomTypes
+            # (note: for single-character atom types, e.g. 'H -NT', the
+            # trailing AtomTypes field itself splits into two extra tokens,
+            # so column *count* isn't checked exactly -- only that there are
+            # enough fields, and that the leading atom indices/R0/K0 fields
+            # actually parse.) Header/banner lines fail this shape check.
+            # Using shape+parseability instead of thresholding on K0's value
+            # means a genuine (if unusual) zero force constant is kept
+            # rather than being silently treated as "not a data row".
+            if len(word) < 4:
+                continue
+            try:
+                cl1 = int(word[0])
+                cl2 = int(word[1])
+                rij = float(word[2])
+                kij = float(word[3])
+            except ValueError:
+                continue
+            bnds['cl1'].append(cl1)
+            bnds['cl2'].append(cl2)
+            bnds['RIJ'].append(rij)
+            bnds['KIJ'].append(kij)
+            bnds['TIJ'].append(line[-5:])
+            nbnd += 1
         return (bnds)
 
     def prep_lbcc(self, bond_data, qdata):
@@ -443,48 +675,20 @@ class BOSSReader(object):
         return np.array(cha.QBCC), lbcc_qdat
 
     def cleanup(self):
-        os.system('cd /tmp;/bin/rm sum log olog out plt.pdb')
+        for fname in ('sum', 'log', 'olog', 'out', 'plt.pdb'):
+            fpath = os.path.join('/tmp', fname)
+            if os.path.exists(fpath):
+                os.remove(fpath)
 
     def get_ImpDat(self, optim, charge):
         self.Get_OPT(optim, charge)
         odat = Refine_file('/tmp/out')
         sdat = Refine_file('/tmp/sum')
         MolData = {}
-        impDat = {}
         MolData['PDB'] = Refine_file('/tmp/plt.pdb')
-        for nl in range(len(odat)):
-            if 'Z-Matrix for Reference Solutes' in odat[nl]:
-                impDat['ATMinit'] = nl
-            elif 'Net Charge' in odat[nl]:
-                impDat['TotalQ'] = nl
-            elif 'OPLS Force Field Parameters' in odat[nl]:
-                impDat['ATMfinal'] = nl
-                impDat['NBDinit'] = nl
-            elif 'Fourier Coefficients' in odat[nl]:
-                impDat['TORinit'] = nl
-                impDat['NBDfinal'] = nl
-            elif 'Bond Stretching Parameters' in odat[nl]:
-                impDat['TORfinal'] = nl
-                impDat['BNDinit'] = nl
-            elif 'Angle Bending Parameters' in odat[nl]:
-                impDat['BNDfinal'] = nl
-                impDat['ANGinit'] = nl
-            elif 'Non-bonded Pairs List' in odat[nl]:
-                impDat['ANGfinal'] = nl
-                impDat['PAIRinit'] = nl
-            elif 'Solute 0:   X          Y          Z' in odat[nl]:
-                impDat['XYZinit'] = nl
-            elif 'Atom I      Atom J      RIJ' in odat[nl]:
-                impDat['XYZfinal'] = nl
-            elif 'Checking' in odat[nl]:
-                impDat['PAIRfinal'] = nl
-#### THIS PART IS READ FROM SUM FILE ###
-        for ml in range(len(sdat)):
-            if 'Additional Dihedrals follow' in sdat[ml]:
-                impDat['ADDinit'] = ml
-            elif 'Domain Definitions follow' in sdat[ml]:
-                impDat['ADDfinal'] = ml
-#### THIS PART IS READ FROM SUM FILE ###
+
+        impDat = find_boss_sections(odat, sdat, zmat_name=self.zmat)
+
         MolData['ATOMS'] = self.get_atinfo(
             odat[impDat['ATMinit']:impDat['ATMfinal']])
         MolData['Q_LJ'] = self.get_QLJ(
@@ -494,6 +698,8 @@ class BOSSReader(object):
         MolData['ANGLES'] = self.get_angs(
             odat[impDat['ANGinit']:impDat['ANGfinal']])
         MolData['TORSIONS'] = self.get_tors(
+            odat[impDat['TORinit']:impDat['TORfinal']])
+        MolData['TORSIONS_BY_DECL_IDX'] = self.get_tors_by_decl_idx(
             odat[impDat['TORinit']:impDat['TORfinal']])
         MolData['ADD_DIHED'] = self.get_addihed(
             sdat[impDat['ADDinit']:impDat['ADDfinal']])
@@ -513,9 +719,8 @@ class BOSSReader(object):
             lbcc_MD['Q_LJ'] = DATA_Q_LJ
             BCC_file2zmat(self.zmat, QLBCC,
                           oname='/tmp/%s_BCC.z' % self.zmat[:-2])
-            os.system('mv %s.z %s_NO_LBCC.z' %
-                      (self.zmat[:-2], self.zmat[:-2]))
-            os.system('mv %s_BCC.z %s.z' % (self.zmat[:-2], self.zmat[:-2]))
+            os.replace('%s.z' % self.zmat[:-2], '%s_NO_LBCC.z' % self.zmat[:-2])
+            os.replace('%s_BCC.z' % self.zmat[:-2], '%s.z' % self.zmat[:-2])
             self.MolData = lbcc_MD
         elif lbcc and (charge != 0):
             print('LBCC IS SUPPORTED ONLY FOR NEUTRAL MOLECULES')

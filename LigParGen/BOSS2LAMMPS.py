@@ -13,7 +13,8 @@ argparse
 numpy
 """
 
-from LigParGen.BOSSReader import bossPdbAtom2Element,bossElement2Mass,ucomb,tor_cent
+from LigParGen.BOSSReader import ucomb,tor_cent
+from LigParGen.boss_common import bossData, pair_declared_torsions
 import pickle
 import pandas as pd
 import numpy as np
@@ -81,14 +82,6 @@ def Boss2LammpsLMP(resid, num2typ2symb, Qs, bnd_df, ang_df, tor_df,molecule_data
 
 
 def Boss2CharmmTorsion(bnd_df, num2opls, st_no, molecule_data, num2typ2symb):
-    dhd = []
-    for line in molecule_data.MolData['TORSIONS']:
-        dt = [float(l) for l in line]
-        dhd.append(dt)
-    dhd = np.array(dhd)
-    dhd = dhd  # kcal to kj conversion
-    dhd = dhd # Klammps = Vopls
-    dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
     ats = []
     for line in molecule_data.MolData['ATOMS'][3:]:
         dt = [line.split()[0], line.split()[4],
@@ -98,9 +91,14 @@ def Boss2CharmmTorsion(bnd_df, num2opls, st_no, molecule_data, num2typ2symb):
     for line in molecule_data.MolData['ADD_DIHED']:
         dt = [int(l) for l in line]
         ats.append(dt)
-    assert len(ats) == len(
-        dhd), 'Number of Dihedral angles in Zmatrix and Out file dont match'
-    ats = np.array(ats) - st_no
+
+    paired_ats, paired_dhd = pair_declared_torsions(molecule_data, ats)
+
+    dhd = np.array(paired_dhd)
+    dhd = dhd  # kcal to kj conversion
+    dhd = dhd # Klammps = Vopls
+    dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
+    ats = np.array(paired_ats) - st_no
     for i in range(len(ats)):
         for j in range(len(ats[0])):
             if ats[i][j] < 0:
@@ -133,7 +131,7 @@ def boss2CharmmBond(molecule_data, st_no):
                     (bnd_df.cl1 + bnd_df.cl2 + 1) * 0.5) + bnd_df.cl2
     bnd_df['UR'] = ((bnd_df.cl1 + bnd_df.cl2) *
                     (bnd_df.cl1 + bnd_df.cl2 + 1) * 0.5) + bnd_df.cl1
-    hb_df = bnd_df.drop(['cl1', 'cl2', 'UF', 'UR'], 1)
+    hb_df = bnd_df.drop(['cl1', 'cl2', 'UF', 'UR'], axis=1)
     hb_df = hb_df.drop_duplicates()
     return bnd_df
 
@@ -150,29 +148,8 @@ def boss2CharmmAngle(anglefile, num2opls, st_no):
     return ang_df
 
 
-def bossData(molecule_data):
-    ats_file = molecule_data.MolData['ATOMS']
-    types = []
-    for i in enumerate(ats_file):
-        types.append([i[1].split()[1], 'opls_' + i[1].split()[2]])
-    st_no = 3
-    Qs = molecule_data.MolData['Q_LJ']
-    assert len(Qs) == len(types), 'Please check the at_info and Q_LJ_dat files'
-    num2opls = {}
-    for i in range(0, len(types)):
-        num2opls[i] = Qs[i][0]
-    num2typ2symb = {i: types[i] for i in range(len(Qs))}
-    for i in range(len(Qs)):
-        num2typ2symb[i].append(bossPdbAtom2Element(
-            num2typ2symb[i][0]) + num2typ2symb[i][1][-3:])
-        num2typ2symb[i].append(bossPdbAtom2Element(num2typ2symb[i][0]))
-        num2typ2symb[i].append(bossElement2Mass(num2typ2symb[i][3]))
-        num2typ2symb[i].append(Qs[i][0])
-    return (types, Qs, num2opls, st_no, num2typ2symb)
-
-
 def Boss2Lammps(resid, molecule_data):
-    types, Qs, num2opls, st_no, num2typ2symb = bossData(molecule_data)
+    types, Qs, num2opls, st_no, num2typ2symb, num2pqrtype = bossData(molecule_data)
     bnd_df = boss2CharmmBond(molecule_data, st_no)
     ang_df = boss2CharmmAngle(molecule_data.MolData['ANGLES'], num2opls, st_no)
     tor_df = Boss2CharmmTorsion(bnd_df, num2opls, st_no,
@@ -182,6 +159,6 @@ def Boss2Lammps(resid, molecule_data):
 
 
 def mainBOSS2LAMMPS(resid, clu=False):
-    mol = pickle.load(open(resid + ".p", "rb"))
+    mol = pickle.load(open(resid + ".pkl", "rb"))
     Boss2Lammps(resid, mol)
     return None

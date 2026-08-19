@@ -14,8 +14,9 @@ argparse
 numpy
 """
 
-from LigParGen.BOSSReader import ucomb,pairing_func,bossPdbAtom2Element,bossElement2Mass
+from LigParGen.BOSSReader import ucomb,pairing_func
 from LigParGen.BOSSReader import Refine_PDB_file,get_coos_from_pdb
+from LigParGen.boss_common import bossData, pair_declared_torsions
 import pickle
 import pandas as pd
 import numpy as np
@@ -85,14 +86,6 @@ def gmxImp(df):
 
 
 def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, itpf):
-    dhd = []
-    for line in molecule_data.MolData['TORSIONS']:
-        dt = [float(f) for f in line]
-        dhd.append(dt)
-    dhd = np.array(dhd)
-    dhd = dhd * 4.184  # kcal to kj conversion
-    dhd = dhd  # Komm = Vopls/2
-    dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
     ats = []
     for line in molecule_data.MolData['ATOMS'][3:]:
         dt = [line.split()[0], line.split()[4],
@@ -102,9 +95,14 @@ def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, itpf):
     for line in molecule_data.MolData['ADD_DIHED']:
         dt = [int(l) for l in line]
         ats.append(dt)
-    assert len(ats) == len(
-        dhd), 'Number of Dihedral angles in Zmatrix and Out file dont match'
-    ats = np.array(ats) - st_no
+
+    paired_ats, paired_dhd = pair_declared_torsions(molecule_data, ats)
+
+    dhd = np.array(paired_dhd)
+    dhd = dhd * 4.184  # kcal to kj conversion
+    dhd = dhd  # Komm = Vopls/2
+    dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
+    ats = np.array(paired_ats) - st_no
     for i in range(len(ats)):
         for j in range(len(ats[0])):
             if ats[i][j] < 0:
@@ -126,7 +124,7 @@ def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, itpf):
             '-' + final_df.TK + '-' + final_df.TL
         final_df = final_df.sort_values(['NAME'])
         tor_bos = final_df.drop(
-            ['I', 'J', 'K', 'L', 'TI', 'TJ', 'TK', 'TL'], 1)
+            ['I', 'J', 'K', 'L', 'TI', 'TJ', 'TK', 'TL'], axis=1)
         tor_bos = tor_bos.drop_duplicates()
         df = final_df.iloc[tor_bos.index]
         return final_df, df
@@ -173,27 +171,6 @@ def boss2gmxAngle(anglefile, num2opls, st_no, itpf):
     return full_ang
 
 
-def bossData(molecule_data):
-    ats_file = molecule_data.MolData['ATOMS']
-    types = []
-    for i in enumerate(ats_file):
-        types.append([i[1].split()[1], 'opls_' + i[1].split()[2]])
-    st_no = 3
-    Qs = molecule_data.MolData['Q_LJ']
-    assert len(Qs) == len(types), 'Please check the at_info and Q_LJ_dat files'
-    num2opls = {}
-    for i in range(0, len(types)):
-        num2opls[i] = Qs[i][0]
-    num2typ2symb = {i: types[i] for i in range(len(Qs))}
-    for i in range(len(Qs)):
-        num2typ2symb[i].append(bossPdbAtom2Element(
-            num2typ2symb[i][0]) + num2typ2symb[i][1][-3:])
-        num2typ2symb[i].append(bossPdbAtom2Element(num2typ2symb[i][0]))
-        num2typ2symb[i].append(bossElement2Mass(num2typ2symb[i][3]))
-        num2typ2symb[i].append(Qs[i][0])
-    return (types, Qs, num2opls, st_no, num2typ2symb)
-
-
 def pdb2gro(atoms, coos, resid):
     grof = open(resid + '.gro', 'w+')
     grof.write('LIGPARGEN GENERATED GRO FILE\n')
@@ -219,7 +196,7 @@ def boss2gmxAtom(resid, num2typ2symb, Qs, itpf):
 
 
 def boss2gmx(resid, molecule_data, pdb_file):
-    types, Qs, num2opls, st_no, num2typ2symb = bossData(
+    types, Qs, num2opls, st_no, num2typ2symb, num2pqrtype = bossData(
         molecule_data)
     itpf = open(resid + '.itp', 'w+')
     itpf.write("""
@@ -286,7 +263,7 @@ def boss2gmx(resid, molecule_data, pdb_file):
 
 
 def mainBOSS2GMX(resid, clu):
-    mol = pickle.load(open(resid + ".p", "rb"))
+    mol = pickle.load(open(resid + ".pkl", "rb"))
     if clu:
         pdb_file = 'clu.pdb'
     else:

@@ -13,7 +13,8 @@ argparse
 numpy
 """
 
-from LigParGen.BOSSReader import bossPdbAtom2Element,bossElement2Mass,ucomb,tor_cent
+from LigParGen.BOSSReader import ucomb,tor_cent
+from LigParGen.boss_common import bossData, pair_declared_torsions
 import pickle
 import pandas as pd
 import numpy as np
@@ -48,7 +49,7 @@ def Boss2CharmmRTF(num2typ2symb, Qs, resid, bnd_df, angs,props,imps):
     rtf.write('\nset echo=false end\n')
     rtf.write('\nautogenerate angles=True dihedrals=True end\n')
     rtf.write('{ atomType  mass }\n')
-    Mass = ['MASS %s %3.4f \n' % (num2typ2symb[i][2], bossElement2Mass(bossPdbAtom2Element(num2typ2symb[i][0]))) for i in range(len(Qs))]
+    Mass = ['MASS %s %3.4f \n' % (num2typ2symb[i][2], num2typ2symb[i][4]) for i in range(len(Qs))]
     for i in range(len(Mass)):
         rtf.write('%s' % Mass[i])
     rtf.write('\nRESIdue %5s\n' % (resid))
@@ -91,8 +92,14 @@ def Boss2CharmmPRM(resid, num2typ2symb, Qs, bnd_df, ang_df, tor_df):
     if len(tor_df.index) > 0:
         tor_df = tor_df.drop_duplicates(['NAME', 'TY'])
     pro_df = tor_df[tor_df.TY == 'Proper']
+    # index labels here are whatever survived drop_duplicates()/the TY
+    # filter, not a contiguous 0..len-1 range, so looking a row up by
+    # .iloc[i] (positional) instead of .loc[i] (by that label) goes out of
+    # bounds as soon as any earlier row was filtered out (pre-existing bug,
+    # previously masked by bossData() crashing before execution reached
+    # here).
     for i in list(pro_df.index):
-        ndf = pro_df.iloc[i]
+        ndf = pro_df.loc[i]
         pro_out = retDihed(ndf.to_dict())
         for i in range(4):
             prm.write('%s' % pro_out[i])
@@ -101,7 +108,7 @@ def Boss2CharmmPRM(resid, num2typ2symb, Qs, bnd_df, ang_df, tor_df):
     prm.write('\n{ Improper Dihedrals: aType1 aType2 aType3 aType4 kt period phase }\n')
     imp_df = tor_df[tor_df.TY == 'Improper']
     for i in list(imp_df.index):
-        ndf = tor_df.iloc[i]
+        ndf = tor_df.loc[i]
         imp_out = retDihedImp(ndf.to_dict())
         for i in range(len(imp_out)):
             prm.write('%s' % imp_out[i])
@@ -119,14 +126,6 @@ def Boss2CharmmPRM(resid, num2typ2symb, Qs, bnd_df, ang_df, tor_df):
 
 
 def Boss2CharmmTorsion(bnd_df, num2opls, st_no, molecule_data, num2typ2symb):
-    dhd = []
-    for line in molecule_data.MolData['TORSIONS']:
-        dt = [float(l) for l in line]
-        dhd.append(dt)
-    dhd = np.array(dhd)
-    dhd = dhd  # kcal to kj conversion
-    dhd = dhd / 2.0  # Komm = Vopls/2
-    dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
     ats = []
     for line in molecule_data.MolData['ATOMS'][3:]:
         dt = [line.split()[0], line.split()[4],
@@ -136,9 +135,14 @@ def Boss2CharmmTorsion(bnd_df, num2opls, st_no, molecule_data, num2typ2symb):
     for line in molecule_data.MolData['ADD_DIHED']:
         dt = [int(l) for l in line]
         ats.append(dt)
-    assert len(ats) == len(
-        dhd), 'Number of Dihedral angles in Zmatrix and Out file dont match'
-    ats = np.array(ats) - st_no
+
+    paired_ats, paired_dhd = pair_declared_torsions(molecule_data, ats)
+
+    dhd = np.array(paired_dhd)
+    dhd = dhd  # kcal to kj conversion
+    dhd = dhd / 2.0  # Komm = Vopls/2
+    dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
+    ats = np.array(paired_ats) - st_no
     for i in range(len(ats)):
         for j in range(len(ats[0])):
             if ats[i][j] < 0:
@@ -171,7 +175,7 @@ def boss2CharmmBond(molecule_data, st_no):
     bnd_df['UR'] = ((bnd_df.cl1 + bnd_df.cl2) *
                     (bnd_df.cl1 + bnd_df.cl2 + 1) * 0.5) + bnd_df.cl1
 #    bnd_df.to_csv('bos_bonds.csv', index=False)
-    hb_df = bnd_df.drop(['cl1', 'cl2', 'UF', 'UR'], 1)
+    hb_df = bnd_df.drop(['cl1', 'cl2', 'UF', 'UR'], axis=1)
     hb_df = hb_df.drop_duplicates()
     return bnd_df
 
@@ -194,29 +198,14 @@ def boss2CharmmAngle(anglefile, num2opls, st_no,num2typ2symb):
     return ang_df
 
 
-def bossData(molecule_data):
-    ats_file = molecule_data.MolData['ATOMS']
-    types = []
-    for i in enumerate(ats_file):
-        types.append([i[1].split()[1], 'opls_' + i[1].split()[2]])
-    st_no = 3
-    Qs = molecule_data.MolData['Q_LJ']
-    assert len(Qs) == len(types), 'Please check the at_info and Q_LJ_dat files'
-    num2opls = {}
-    for i in range(0, len(types)):
-        num2opls[i] = Qs[i][0]
-    num2typ2symb = {i: types[i] for i in range(len(Qs))}
-    for i in range(len(Qs)):
-        trm = bossPdbAtom2Element(num2typ2symb[i][0]) + num2typ2symb[i][1][-3:]
-        num2typ2symb[i].append(trm[0:4])
-        num2typ2symb[i].append(bossPdbAtom2Element(num2typ2symb[i][0]))
-        num2typ2symb[i].append(bossElement2Mass(num2typ2symb[i][3]))
-        num2typ2symb[i].append(Qs[i][0])
-    return (types, Qs, num2opls, st_no, num2typ2symb)
-
-
 def Boss2Charmm(resid, molecule_data):
-    types, Qs, num2opls, st_no, num2typ2symb = bossData(molecule_data)
+    types, Qs, num2opls, st_no, num2typ2symb, num2pqrtype = bossData(molecule_data)
+    # XPLOR's atomType field is column-width-limited to 4 characters in the
+    # .top/.param format (unlike the other converters' class field, which is
+    # printed unconstrained); truncate the canonical class string to match,
+    # same as this file's own bossData() always did.
+    for i in num2typ2symb.keys():
+        num2typ2symb[i][2] = num2typ2symb[i][2][0:4]
     bnd_df = boss2CharmmBond(molecule_data, st_no)
     ang_df = boss2CharmmAngle(molecule_data.MolData['ANGLES'], num2opls, st_no,num2typ2symb)
     tor_df = Boss2CharmmTorsion(bnd_df, num2opls, st_no,
@@ -228,6 +217,6 @@ def Boss2Charmm(resid, molecule_data):
 
 
 def mainBOSS2XPLOR(resid, clu=False):
-    mol = pickle.load(open(resid + ".p", "rb"))
+    mol = pickle.load(open(resid + ".pkl", "rb"))
     Boss2Charmm(resid, mol)
     return None

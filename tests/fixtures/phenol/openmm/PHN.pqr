@@ -1,0 +1,29 @@
+REMARK LIGPARGEN GENERATED PQR FILE
+ATOM      1  C00 PHN     1       1.000   1.000   0.000 -0.1819 1.9924
+ATOM      2  C01 PHN     1      -0.409   1.000   0.000 -0.0943 1.9924
+ATOM      3  C02 PHN     1      -1.115   1.000   1.220 -0.2086 1.9924
+ATOM      4  C03 PHN     1      -0.410   1.000   2.440  0.3665 1.9924
+ATOM      5  C04 PHN     1       0.997   1.000   2.439 -0.2086 1.9924
+ATOM      6  C05 PHN     1       1.703   1.000   1.220 -0.0943 1.9924
+ATOM      7  O06 PHN     1      -1.078   1.000   3.627 -0.7303 1.7510
+ATOM      8  H07 PHN     1       1.542   1.000  -0.935  0.1407 1.3582
+ATOM      9  H08 PHN     1      -0.948   1.000  -0.936  0.1422 1.3582
+ATOM     10  H09 PHN     1      -2.195   1.000   1.200  0.1468 1.3582
+ATOM     11  H0A PHN     1       1.535   1.000   3.376  0.1468 1.3582
+ATOM     12  H0B PHN     1       2.784   1.000   1.224  0.1422 1.3582
+ATOM     13  H0C PHN     1      -2.017   1.000   3.531  0.4327 0.0000
+TER 
+CONECT    1    2 
+CONECT    2    3 
+CONECT    3    4 
+CONECT    4    5 
+CONECT    1    6 
+CONECT    4    7 
+CONECT    1    8 
+CONECT    2    9 
+CONECT    3   10 
+CONECT    5   11 
+CONECT    6   12 
+CONECT    7   13 
+CONECT    5    6 
+END

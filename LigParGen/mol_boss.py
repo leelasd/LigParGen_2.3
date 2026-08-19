@@ -4,6 +4,8 @@
 import numpy as np
 import pandas as pd
 import openbabel
+from rdkit import Chem
+from rdkit.Chem import AllChem
 
 def convert_pdb2mol(pdbfile):
     print('Converting PDB to MOL using OpenBabel')
@@ -14,6 +16,38 @@ def convert_pdb2mol(pdbfile):
     mol = openbabel.OBMol()
     obConversion.ReadFile(mol, pdbfile)   # Open Babel will uncompress automatically
     obConversion.WriteFile(mol, mol_file)
+    return mol_file
+
+def convert_pdb2mol_with_smiles(pdbfile, smiles):
+    """Recover a PDB's connectivity/bond orders/missing Hs from a trusted SMILES.
+
+    PDB CONECT records carry no bond-order information, and PDB files are
+    frequently missing hydrogens entirely, so OpenBabel's distance-based bond
+    perception in convert_pdb2mol() can misplace or drop bonds outright, not
+    just get their order wrong. When the caller can supply a SMILES for the
+    same molecule, RDKit's AssignBondOrdersFromTemplate lets the SMILES act as
+    ground truth for connectivity and bond order while the PDB still supplies
+    the 3D coordinates; any hydrogens the PDB was missing are then added with
+    RDKit-estimated positions built from the existing heavy-atom geometry.
+    """
+    print('Using SMILES as a template to assign bond orders to the PDB structure')
+    prefix = pdbfile.split('.')[0]
+    mol_file = '%s.mol' % prefix
+    pdb_mol = Chem.MolFromPDBFile(pdbfile, removeHs=False, sanitize=True)
+    if pdb_mol is None:
+        raise ValueError('RDKit could not parse %s' % pdbfile)
+    template = Chem.MolFromSmiles(smiles)
+    if template is None:
+        raise ValueError('RDKit could not parse SMILES: %s' % smiles)
+    try:
+        fixed = AllChem.AssignBondOrdersFromTemplate(template, pdb_mol)
+    except ValueError as exc:
+        raise ValueError(
+            "SMILES '%s' does not match the heavy-atom connectivity of %s: %s"
+            % (smiles, pdbfile, exc)
+        ) from exc
+    fixed = Chem.AddHs(fixed, addCoords=True)
+    Chem.MolToMolFile(fixed, mol_file, kekulize=True)
     return mol_file
 
 def rev_bnd(bnd):
