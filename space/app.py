@@ -13,9 +13,10 @@ baked into the image.
 """
 import glob
 import os
+import random
 import shutil
+import string
 import tempfile
-import uuid
 
 import gradio as gr
 from gradio_molecule3d import Molecule3D
@@ -105,7 +106,16 @@ def run_ligpargen(smiles_text, upload_file, opt_iters, charge_model, charge, pro
     lbcc = charge_model == "1.14*CM1A-LBCC (neutral molecules)"
     resolved_charge = 0 if lbcc else int(charge)
 
-    resname = "LPG" + uuid.uuid4().hex[:5].upper()
+    # PDB's resName field is a strict 3-character fixed-width column (spec cols
+    # 18-20) -- LigParGen's own PDB/GRO/etc. writers use fixed-width formatting
+    # too, so anything longer silently overflows into the chainID/resSeq/coordinate
+    # columns downstream. Confirmed live: an 8-char resname ("LPG"+5 hex chars)
+    # shifted every coordinate column and produced a non-numeric resSeq, which
+    # RDKit's own PDB parser (MolFromPDBFile) outright rejected and PyMOL misread.
+    # 3 random letters -- matches the CLI's own convention ("-r, should be a 3
+    # LETTER WORD") and gives 26**3 = 17,576 combinations, plenty for this app's
+    # single-worker, serialized-queue usage.
+    resname = "".join(random.choices(string.ascii_uppercase, k=3))
     job_dir = tempfile.mkdtemp(prefix="ligpargen_")
 
     kwargs = dict(opt=int(opt_iters), charge=resolved_charge, lbcc=lbcc, resname=resname)
