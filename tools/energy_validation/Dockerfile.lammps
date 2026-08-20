@@ -1,0 +1,10 @@
+# Adds LAMMPS (freely available via Debian's own apt repo, GPL) on top of
+# the OpenMM image, for single-point energy evaluation of generated .lmp
+# data files. See ../README.md.
+#
+# Build (after building ligpargen-openmm:dev via Dockerfile.openmm):
+#   docker build -f Dockerfile.lammps -t ligpargen-lammps:dev .
+FROM ligpargen-openmm:dev
+USER root
+RUN apt-get update -qq && apt-get install -y --no-install-recommends lammps && rm -rf /var/lib/apt/lists/*
+ENTRYPOINT ["/bin/bash"]

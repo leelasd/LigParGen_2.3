@@ -217,10 +217,50 @@ def convert(**kwargs):
         os.replace('%s.z' % resname, '%s_CM1A.z' % resname)
         os.replace('%s_CM5.z' % resname, '%s.z' % resname)
 
-    assert (mol.MolData['TotalQ']['Reference-Solute'] ==
-            charge), "PROPOSED CHARGE IS NOT POSSIBLE: SOLUTE MAY BE AN OPEN SHELL"
-    assert(CheckForHs(mol.MolData['ATOMS'])
-           ), "Hydrogens are not added. Please add Hydrogens"
+    # BOSS's own AM1SCM1A charge generation, not anything computed on this
+    # side, is what can produce a mismatch here -- confirmed directly (on
+    # real x86_64 hardware, not just under emulation) that requesting any
+    # negative net charge (anions from a simple hydroxide up through a
+    # bistriflimide-sized species) makes BOSS report back +1.00000
+    # regardless of the actual requested value or structure, even though
+    # the AM1SP-par file LigParGen hands it is correctly populated with
+    # the requested charge. There is no LigParGen-side data path left to
+    # fix -- see docs/adr/0005 in the main repo. The historical "SOLUTE MAY
+    # BE AN OPEN SHELL" wording actively misdiagnosed this: it's not an
+    # open-shell/radical issue, it's this specific BOSS binary mishandling
+    # negative net charges.
+    if mol.MolData['TotalQ']['Reference-Solute'] != charge:
+        got = mol.MolData['TotalQ']['Reference-Solute']
+        msg = "BOSS computed a total charge of %s for this solute, not the requested %s. " % (got, charge)
+        if charge < 0:
+            msg += (
+                "This is a known limitation of BOSS's own AM1SCM1A charge "
+                "generation for negative net charges (not a LigParGen bug) "
+                "-- see docs/adr/0005."
+            )
+        else:
+            msg += (
+                "Double-check the input structure's formal charges -- a "
+                "non-integer result in particular usually means the input "
+                "geometry/bond-order perception (e.g. a PDB with no bond "
+                "orders of its own) produced a structurally different "
+                "molecule than intended."
+            )
+        raise AssertionError(msg)
+    # CheckForHs guards against a PDB/MOL input that's genuinely missing
+    # hydrogens the user forgot to add -- PDB and MOL files don't imply
+    # hydrogens the way SMILES does. A molecule with zero hydrogens by valid
+    # chemistry (CF4, CCl4, hexafluoroethane, ...) must not trip this.
+    # Skip the check for the smiles-driven paths (smiles-only, or a PDB
+    # paired with a trusted SMILES template -- convert_pdb2mol_with_smiles
+    # RDKit-estimates positions for any hydrogens the PDB itself was
+    # missing, so those are already resolved) and for zmat, whose atom list
+    # is already a complete, explicit, user-authored specification. Only
+    # the ambiguous bare-pdb/bare-mol branches (no smiles to cross-check
+    # against) still need this safety net.
+    if smiles is None and zmat is None:
+        assert(CheckForHs(mol.MolData['ATOMS'])
+               ), "Hydrogens are not added. Please add Hydrogens"
 
     pickle.dump(mol, open(resname + ".pkl", "wb"))
     mainBOSS2OPM(resname, clu)

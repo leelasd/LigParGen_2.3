@@ -204,13 +204,33 @@ def pairing_func(a, b):
 
 
 def ucomb(vec, blist):
+    """Chain-adjacency check for a declared dihedral quadruple [i, j, k, l]:
+    counts how many of the three CONSECUTIVE pairs -- (i,j), (j,k), (k,l) --
+    are real bonds. Every caller compares this to 3 to decide "Proper"
+    (a genuine bonded chain) vs "Improper" (typically a hub atom bonded to
+    the other three, with those three not bonded to each other).
+
+    This used to count bonded pairs among all 6 possible pairs of the 4
+    atoms, not just the 3 consecutive ones -- but a hub/star quadruple also
+    has exactly 3 bonded pairs among its 6 (hub-to-each-substituent), so
+    that count alone could never actually distinguish a chain from a star;
+    every BOSS-declared quadruple (chain or star) has exactly 3 real bonds
+    among its 4 atoms by construction, so the old check was structurally
+    always true. Confirmed directly: benzene's real ring impropers (a
+    hub atom bonded to its two ring neighbors and its H) satisfied the old
+    count-of-6 test, so every writer sharing this function silently
+    labelled every improper as a Proper torsion instead. Checking
+    specifically for the 3 CONSECUTIVE pairs fixes this: a star's
+    non-hub-adjacent pair (e.g. the two substituents on either side of the
+    hub, when the hub isn't in position 2 or 3) is never a real bond, so
+    the consecutive-pair count comes out below 3 for a genuine improper.
+    """
+    i, j, k, l = vec
     res = 0
-    for a in vec:
-        vec.remove(a)
-        for b in vec:
-            ans = (a + b) * (a + b + 1) * 0.5
-            if (ans + a in blist) or (ans + b in blist):
-                res = res + 1
+    for a, b in ((i, j), (j, k), (k, l)):
+        ans = (a + b) * (a + b + 1) * 0.5
+        if (ans + a in blist) or (ans + b in blist):
+            res = res + 1
     return res
 
 
@@ -333,11 +353,54 @@ def find_boss_sections(odat, sdat, zmat_name='<zmat>'):
             impDat['PAIRfinal'] = nl
 #### THIS PART IS READ FROM SUM FILE ###
     for ml in range(len(sdat)):
-        if 'Additional Dihedrals follow' in sdat[ml]:
+        # LigParGen's own auto-generated Zmats always print this banner as
+        # "Additional Dihedrals follow (6I4)". BOSS's own reference Zmat
+        # library (molecules/small/*.z etc.) instead prints "Additional
+        # Dihedrals (6I4) - Zero types not shown" when run through xSPM
+        # alone (confirmed directly against real BOSS output for
+        # molecules/small/acetam.z) -- same section, same column format,
+        # different banner text depending on which BOSS code path wrote
+        # it. Match either.
+        if 'Additional Dihedrals follow' in sdat[ml] or 'Additional Dihedrals (' in sdat[ml]:
             impDat['ADDinit'] = ml
         elif 'Domain Definitions follow' in sdat[ml]:
             impDat['ADDfinal'] = ml
 #### THIS PART IS READ FROM SUM FILE ###
+
+    # A molecule too small to have some interaction type (water has no
+    # torsions; a bare monatomic ion has no bonds/angles/torsions/pairs at
+    # all) makes BOSS omit that section's banner entirely from /tmp/out --
+    # not print it empty, just never print it -- confirmed directly by
+    # inspecting real BOSS output for 'O' (water) and '[Cl-]'. Each of
+    # these four banners marks BOTH the end of the section before it and
+    # the start of the section after, so when one is missing, both of its
+    # keys legitimately collapse to the nearest following boundary that
+    # *was* found (walking backwards from 'Checking', the fixed anchor
+    # that always terminates this chain). The resulting slice then simply
+    # picks up a little extra neighboring text (e.g. the 'Net Charge'
+    # block), which is harmless: every get_* consumer of these slices
+    # (get_QLJ/get_bonds/get_angs/get_tors) only keeps lines matching a
+    # specific data-row shape and ignores everything else. This only
+    # fires once 'OPLS Force Field Parameters' and 'Checking' -- always
+    # present for a run that actually completed -- are both found; if
+    # either is missing too, that's a real failure and falls through to
+    # the strict check below unchanged.
+    optional_chain = [
+        ('Fourier Coefficients', ('NBDfinal', 'TORinit')),
+        ('Bond Stretching Parameters', ('TORfinal', 'BNDinit')),
+        ('Angle Bending Parameters', ('BNDfinal', 'ANGinit')),
+        ('Non-bonded Pairs List', ('ANGfinal', 'PAIRinit')),
+    ]
+    collapsed_banners = set()
+    if 'NBDinit' in impDat and 'PAIRfinal' in impDat:
+        fallback = impDat['PAIRfinal']
+        for banner, keys in reversed(optional_chain):
+            if keys[0] in impDat:
+                fallback = impDat[keys[0]]
+            else:
+                impDat[keys[0]] = fallback
+                impDat[keys[1]] = fallback
+                collapsed_banners.add(banner)
 
     missing_banners = [
         banner for banner, keys in ODAT_BANNERS + SDAT_BANNERS
@@ -355,17 +418,22 @@ def find_boss_sections(odat, sdat, zmat_name='<zmat>'):
     # banner-derived start/end indices are used to slice odat below.
     # ('Additional Dihedrals' is intentionally excluded: an empty block
     # there just means the solute has no additional dihedrals, which is
-    # normal.)
+    # normal -- and BONDS/ANGLES/TORSIONS/PAIRS are excluded too exactly
+    # when their own governing banner above was legitimately absent and
+    # collapsed to a zero-width slice: that's the same "normal, not an
+    # error" case, just one banner earlier in the chain.)
     non_empty_sections = [
-        ('ATOMS', 'ATMinit', 'ATMfinal'),
-        ('Q_LJ (non-bonded)', 'NBDinit', 'NBDfinal'),
-        ('BONDS', 'BNDinit', 'BNDfinal'),
-        ('ANGLES', 'ANGinit', 'ANGfinal'),
-        ('TORSIONS', 'TORinit', 'TORfinal'),
-        ('XYZ', 'XYZinit', 'XYZfinal'),
-        ('PAIRS', 'PAIRinit', 'PAIRfinal'),
+        ('ATOMS', 'ATMinit', 'ATMfinal', None),
+        ('Q_LJ (non-bonded)', 'NBDinit', 'NBDfinal', None),
+        ('BONDS', 'BNDinit', 'BNDfinal', 'Bond Stretching Parameters'),
+        ('ANGLES', 'ANGinit', 'ANGfinal', 'Angle Bending Parameters'),
+        ('TORSIONS', 'TORinit', 'TORfinal', 'Fourier Coefficients'),
+        ('XYZ', 'XYZinit', 'XYZfinal', None),
+        ('PAIRS', 'PAIRinit', 'PAIRfinal', 'Non-bonded Pairs List'),
     ]
-    for name, start_key, end_key in non_empty_sections:
+    for name, start_key, end_key, governing_banner in non_empty_sections:
+        if governing_banner is not None and governing_banner in collapsed_banners:
+            continue
         start, end = impDat[start_key], impDat[end_key]
         if end <= start:
             raise ValueError(
@@ -705,8 +773,18 @@ class BOSSReader(object):
             sdat[impDat['ADDinit']:impDat['ADDfinal']])
         MolData['XYZ'] = self.get_XYZ(
             odat[impDat['XYZinit']:impDat['XYZfinal']])
-        MolData['PAIRS'] = self.get_pairs(
-            odat[impDat['PAIRinit']:impDat['PAIRfinal']])
+        # get_pairs() requires at least one 'Atom N:' marker in its slice --
+        # correct for a real (even if all-empty) Non-bonded Pairs List, but
+        # a molecule too small to have one at all (find_boss_sections()
+        # collapses it to a zero-width slice in that case) has no markers
+        # to find, so skip straight to an empty result instead of tripping
+        # get_pairs()'s own "output may be malformed" check on a slice that
+        # was never expected to contain anything.
+        if impDat['PAIRinit'] == impDat['PAIRfinal']:
+            MolData['PAIRS'] = []
+        else:
+            MolData['PAIRS'] = self.get_pairs(
+                odat[impDat['PAIRinit']:impDat['PAIRfinal']])
         MolData['TotalQ'] = self.get_charge(
             odat[impDat['TotalQ']:impDat['TotalQ'] + 4])
         return MolData

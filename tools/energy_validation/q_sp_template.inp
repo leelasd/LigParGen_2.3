@@ -1,0 +1,21 @@
+[MD]
+steps                    1
+stepsize                 0.1
+temperature              0.001
+initial_temperature      0.0
+shake_solute             off
+shake_solvent            off
+shake_hydrogens          off
+lrf                      off
+
+[cut-offs]
+solute_solute            99.0
+q_atom                   99.0
+
+[intervals]
+non_bond                 1
+output                   1
+
+[files]
+topology                 __RESID___q.top
+final                    __RESID___qsp.re

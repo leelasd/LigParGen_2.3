@@ -1,0 +1,31 @@
+# Adds TINKER, built from source (freely available, BSD-style academic
+# license, no separate license needed -- unlike BOSS/NAMD) on top of the
+# OpenMM image, for single-point energy evaluation of generated .xyz/.key
+# files. See ../README.md.
+#
+# Build (after building ligpargen-openmm:dev via Dockerfile.openmm):
+#   docker build --platform linux/amd64 -f Dockerfile.tinker -t ligpargen-tinker:dev .
+FROM ligpargen-openmm:dev
+USER root
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+        gfortran cmake make git ca-certificates pkg-config libfftw3-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 https://github.com/TinkerTools/tinker.git /opt/tinker-src
+WORKDIR /opt/tinker-src
+# TinkerTools/tinker's cmake/CMakeLists.txt _FILES list (its own curated
+# source-file inventory, an alternative to the officially-supported
+# classic Makefile build) is missing "uatom" -- source/uatom.f exists and
+# defines a module several other files `use`, but isn't in that list, so
+# the CMake build fails on the first file that needs it ("Cannot open
+# module file uatom.mod"). A real omission in upstream's own CMake
+# packaging, unrelated to LigParGen -- patched around here rather than
+# waiting on it.
+RUN sed -i 's/^set(_LIB "")/set(_LIB "${TINKER_DIR}\/source\/uatom.f")/' cmake/CMakeLists.txt
+# -j1: TINKER's Fortran module (.mod) dependencies aren't fully expressed
+# in its CMake target graph either, so a parallel build can try to
+# compile a file before the module it `use`s exists yet -- serial build
+# avoids that race too.
+RUN cmake -S cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build -j1 --target analyze
+RUN ln -s /opt/tinker-src/build/analyze /usr/local/bin/analyze
+ENTRYPOINT ["/bin/bash"]

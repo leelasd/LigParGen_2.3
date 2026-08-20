@@ -25,6 +25,53 @@ from rdkit import Chem
 _PERIODIC_TABLE = Chem.GetPeriodicTable()
 
 
+def _redistribute_charge_rounding_residual(Qs):
+    """Nudge each atom's charge (Qs[i][1], a string) so the set sums to
+    exactly the nearest integer, in place.
+
+    BOSS itself only prints each atom's CM1A charge to 4 decimal places;
+    summed across a whole molecule that finite precision alone is enough
+    to land a few 1e-4 away from the intended net integer charge (reported
+    upstream, e.g. leelasd/ligpargen#59: GROMACS grompp warning about a
+    "System has non-zero total charge" of -7.9996 instead of -8, for a
+    molecule LigParGen otherwise parameterized correctly -- Converter.py's
+    own assertion already confirmed BOSS's TotalQ rounds to the requested
+    integer charge to 3 decimals, so this is purely a print-precision
+    artifact, not a real charge error). Split the residual evenly across
+    every atom -- the correction here is on the order of 1e-4/N per atom,
+    chemically meaningless, but makes every downstream file's own charge
+    column sum to exactly the right integer instead of leaving each
+    format's writer to silently reproduce the same rounding gap.
+    """
+    charges = [float(q[1]) for q in Qs]
+    residual = round(sum(charges)) - sum(charges)
+    correction = residual / len(charges)
+    for i, q in enumerate(Qs):
+        q[1] = '%.6f' % (charges[i] + correction)
+
+
+def _uniquify_atom_names(names):
+    """Disambiguate duplicate atom names within one residue, in place --
+    e.g. ['C', 'C', 'C', 'H', 'H'] -> ['C1', 'C2', 'C3', 'H1', 'H2'].
+
+    LigParGen's own auto-generated Zmatrices always carry unique names
+    (CreatZmat.py generates them that way, e.g. 'C00'/'H01'), so this is a
+    no-op there. Real BOSS reference Zmatrices (e.g. this machine's own
+    BOSS install's molecules/small/*.z) often don't bother -- confirmed
+    directly, e.g. molecules/small/benzen.z names every ring carbon plain
+    'C' -- which OpenMM's ForceField XML loader rejects outright
+    ("Residue ... contains multiple atoms named C"), since it matches PDB
+    atoms to a residue template by name.
+    """
+    seen = {}
+    for i, name in enumerate(names):
+        seen.setdefault(name, []).append(i)
+    for name, idxs in seen.items():
+        if len(idxs) > 1:
+            for n, i in enumerate(idxs, start=1):
+                names[i] = '%s%d' % (name, n)
+
+
 def bossData(molecule_data):
     ats_file = molecule_data.MolData['ATOMS']
     # Elements come from MolData['XYZ']'s own atomic-number column, not
@@ -38,21 +85,34 @@ def bossData(molecule_data):
     types = []
     for i in enumerate(ats_file):
         types.append([i[1].split()[1], 'opls_' + i[1].split()[2]])
-    # st_no offsets a bonded-pair's raw Zmat atom index down to a 0-based
-    # index into types/Qs/num2opls (which start at the first REAL atom).
-    # LigParGen's own auto-generated Zmats always place exactly 2 leading
-    # dummy atoms, so the first real atom's raw index is always 3 -- but
-    # BOSS's own reference Zmat library is inconsistent about this (some
-    # files use 2 leading dummies, some 3, some place the dummies after
-    # the first real atom instead of before), so hardcoding 3 silently
-    # mis-indexes bonded pairs for anything that isn't the 2-leading-dummy
-    # case, and can even index out of range (reproduced on his.z).
-    # Reading it from the first real atom's own raw index is correct for
-    # both conventions.
-    st_no = int(ats_file[0].split()[0])
+    names = [t[0] for t in types]
+    _uniquify_atom_names(names)
+    for i, name in enumerate(names):
+        types[i][0] = name
+    # zmat_idx_map translates a bonded-pair's raw Zmat atom index (BOSS's
+    # own 1-based numbering, which includes dummy atoms wherever BOSS's
+    # Zmatrix places them) to a 0-based index into types/Qs/num2opls
+    # (which list only the real atoms, in ats_file's order). LigParGen's
+    # own auto-generated Zmats always place exactly 2 leading dummy atoms,
+    # so a single scalar offset (the first real atom's own raw index) used
+    # to be enough -- but BOSS's own reference Zmat library is
+    # inconsistent about this (some files use 2 leading dummies, some 3,
+    # some place dummies after the first real atom instead of before --
+    # confirmed directly on molecules/small/acetam.z: real atom at raw
+    # index 1, then 2 dummies at raw indices 2-3, then the rest of the
+    # real atoms continuing from raw index 4). Once dummies aren't a
+    # single contiguous leading block, ANY single scalar offset silently
+    # mis-indexes bonded pairs for atoms after the gap (reproduced as a
+    # KeyError in boss2opmBond on acetam.z, and would otherwise silently
+    # mis-assign bonded terms for cases that don't happen to raise).
+    # ats_file already carries each real atom's own raw index as its
+    # first column, so build the real mapping directly from it instead of
+    # assuming where dummies fall.
+    zmat_idx_map = {int(line.split()[0]): i for i, line in enumerate(ats_file)}
     Qs = molecule_data.MolData['Q_LJ']
     assert len(Qs) == len(types), 'Please check the at_info and Q_LJ_dat files'
     assert len(xyz) == len(types), 'Please check the at_info and XYZ data'
+    _redistribute_charge_rounding_residual(Qs)
     num2typ2symb = {i: types[i] for i in range(len(Qs))}
     for i in range(len(Qs)):
         elem = _PERIODIC_TABLE.GetElementSymbol(int(xyz['at_num'][i]))
@@ -67,7 +127,23 @@ def bossData(molecule_data):
     for i in range(len(Qs)):
         num2pqrtype[i].append(Qs[i][1])
         num2pqrtype[i].append(Qs[i][2])
-    return (types, Qs, num2opls, st_no, num2typ2symb, num2pqrtype)
+    return (types, Qs, num2opls, zmat_idx_map, num2typ2symb, num2pqrtype)
+
+
+def translate_zmat_indices(raw_indices, zmat_idx_map):
+    """Translate a sequence of raw (BOSS-numbered) Zmatrix atom indices to
+    0-based indices into the real-atoms-only arrays bossData() returns
+    (types/Qs/num2opls/...), using the exact map it builds.
+
+    A raw index not in the map refers to a dummy atom -- resolves to 0,
+    the same placeholder every call site already used for this case
+    before dummy atoms could appear anywhere but a single leading block
+    (see bossData()'s zmat_idx_map comment): under the old scalar-offset
+    scheme a dummy's raw index always subtracted down to a negative
+    number, which every site already clamped to 0 for exactly this
+    reason.
+    """
+    return [zmat_idx_map.get(int(x), 0) for x in raw_indices]
 
 
 def pair_declared_torsions(molecule_data, ats):

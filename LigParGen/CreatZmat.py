@@ -14,13 +14,36 @@ import LigParGen
 import subprocess
 import os
 import shutil
+import math
 import numpy as np
-from LigParGen.Vector_algebra import pairing_func, angle, dihedral, tor_id, ang_id,bossElement2Num, Distance
+from LigParGen.Vector_algebra import pairing_func, angle, dihedral, tor_id, ang_id,bossElement2Num, Distance, subtract, dot, length
 import itertools
 import collections
 import networkx as nx
 from openbabel import openbabel as ob
 from openbabel import pybel
+
+
+def _is_degenerate_angle(p0, p1, p2, tol_deg=8.0):
+    """True if p0-p1-p2 is at/near 0 or 180 degrees.
+
+    A Z-matrix angle reference this close to collinear is numerically
+    unusable two ways downstream: BOSS's own Zmatrix optimizer treats it as
+    invalid ("VARIABLE ANGLE BECOMES LINEAR ... IT IS RECOMMENDED TO REVISE
+    THE ZMATRIX", confirmed on a terminal-alkyne test case, after which it
+    never finishes writing its output), and Vector_algebra.dihedral() divides
+    by a zero-length cross product for the same geometry (confirmed via a
+    ZeroDivisionError in Mol_angle on a linear C#C-C#C chain). Used to pick a
+    different, non-degenerate reference atom instead of either of those.
+    """
+    v0 = subtract(p0, p1)
+    v1 = subtract(p2, p1)
+    l0, l1 = length(v0), length(v1)
+    if l0 < 1e-6 or l1 < 1e-6:
+        return True
+    cosa = max(-1.0, min(1.0, dot(v0, v1) / l0 / l1))
+    ang = math.degrees(math.acos(cosa))
+    return ang < tol_deg or ang > (180.0 - tol_deg)
 
 
 def _babel_gen3d(ifile, iform):
@@ -184,7 +207,21 @@ def make_graphs(atoms, coos, bonds):
     all_imps = {}
     for i in imp_keys:
         nei = list(G.neighbors(i))
-        if G.nodes[i]['atno'] == 6:
+        # A 3-connected carbon is (almost) always sp2 (planar), so an
+        # improper enforcing planarity is always wanted for it -- sp3
+        # carbon is 4-connected and never reaches this branch. Nitrogen is
+        # ambiguous at the topology level (a plain pyramidal sp3 amine is
+        # also 3-connected), but conjugated/planar nitrogens -- amide,
+        # aniline, guanidine, pyrrole, etc. -- are common and were
+        # previously skipped entirely (see e.g. oxamide, whose two amide
+        # nitrogens got no improper at all even though BOSS/OPLS-AA has
+        # real, nonzero parameters for exactly this center). Request one
+        # for nitrogen too, same as carbon: BOSS's own parameter lookup
+        # already degrades gracefully (falls back to a synonym or an
+        # estimate) when a center genuinely has no matching improper
+        # parameter, which is the same safety net every other topology-only
+        # geometry guess in this function already relies on.
+        if G.nodes[i]['atno'] in (6, 7):
             all_imps[i] = [nei[0], i, nei[1], nei[2]]
     MOL_ICOORDS = {'BONDS': all_bonds,
                    'ANGLES': dict_new_angs, 'TORSIONS': dict_new_tors, 'IMPROPERS': all_imps}
@@ -243,23 +280,93 @@ def print_ZMAT(atoms, G_mol, mol_icords, coos, zmat_name, resid):
     A_LINK = {}
     for i in G_mol.nodes():
         if n_ats > 1:
-            neigs = np.sort(list(G_mol.neighbors(B_LINK[i])))
-            A_LINK[i] = neigs[0]
-            ang = angle(coos[i], coos[B_LINK[i]], coos[neigs[0]])
-            Z_ANGLES[i + 2] = (i + 2, B_LINK[i] + 2, neigs[0] + 2, ang)
+            # Prefer the smallest-index neighbor of B_LINK[i] (previous
+            # behavior), but skip any candidate that leaves i-B_LINK[i]-
+            # candidate collinear -- e.g. B_LINK[i] sitting on a triple bond,
+            # where its smallest-index neighbor is the other, in-line, end of
+            # that bond. Widen to every other atom in the molecule (a
+            # Z-matrix angle reference need not be a real bonded neighbor)
+            # before giving up and falling back to the original choice.
+            direct = [n for n in np.sort(list(G_mol.neighbors(B_LINK[i]))) if n != i]
+            cand_pool = direct + [n for n in sorted(G_mol.nodes())
+                                   if n not in direct and n not in (i, B_LINK[i])]
+            chosen = next((c for c in cand_pool
+                           if not _is_degenerate_angle(coos[i], coos[B_LINK[i]], coos[c])),
+                          cand_pool[0])
+            A_LINK[i] = chosen
+            ang = angle(coos[i], coos[B_LINK[i]], coos[chosen])
+            # If no candidate anywhere in the molecule avoids collinearity
+            # (a genuinely linear fragment, e.g. the internal carbons of a
+            # bare polyyne -- 180 degrees is then the chemically correct
+            # angle, not a reference-choice artifact), seed BOSS's Zmatrix
+            # optimizer just off the exact singularity instead of exactly on
+            # it: confirmed empirically that an initial angle at ~180.00-
+            # 180.08 makes BOSS itself reject the Zmatrix ("VARIABLE ANGLE
+            # BECOMES LINEAR ... IT IS RECOMMENDED TO REVISE THE ZMATRIX",
+            # optimization never completing / /tmp/sum left empty), where
+            # BOSS can and does optimize a nearby, non-singular starting
+            # value like 179.9 just fine. Only the initial guess moves; the
+            # true equilibrium is still whatever BOSS's own optimizer finds.
+            if ang > 179.9:
+                ang = 179.9
+            elif ang < 0.1:
+                ang = 0.1
+            Z_ANGLES[i + 2] = (i + 2, B_LINK[i] + 2, chosen + 2, ang)
         n_ats += 1
     n_ats = 0
     for i in G_mol.nodes():
         if n_ats > 2:
+            # tl must leave B_LINK[i]-A_LINK[i]-tl non-collinear too (that's
+            # the *other* cross product dihedral() takes -- a fine i-B_LINK[i]-
+            # A_LINK[i] angle from the A_LINK pass above doesn't guarantee
+            # this second one is safe as well), so apply the same
+            # degeneracy check here, at each fallback stage, before taking
+            # the first candidate.
             neigs =list(G_mol.neighbors(A_LINK[i]))
             neigs = np.array([j for j in neigs if j not in [i, B_LINK[i], A_LINK[i]]])
             neigs = np.sort(neigs)
-            neigs = neigs[neigs<i]
-            if len(neigs)<1:
-               neigs = [j for j in list(G_mol.neighbors(B_LINK[i])) if j not in [i,A_LINK[i]]]
+            neigs_lt_i = neigs[neigs < i]
+            tl = next((j for j in neigs_lt_i
+                       if not _is_degenerate_angle(coos[B_LINK[i]], coos[A_LINK[i]], coos[j])),
+                      None)
+            if tl is None:
+               fallback = [j for j in list(G_mol.neighbors(B_LINK[i])) if j not in [i,A_LINK[i]]]
+               tl = next((j for j in fallback
+                          if not _is_degenerate_angle(coos[B_LINK[i]], coos[A_LINK[i]], coos[j])),
+                         None)
                if (B_LINK[i] in list(mol_icords['IMPROPERS'].keys())): del mol_icords['IMPROPERS'][B_LINK[i]]
-            [ti, tj, tk, tl] = [i, B_LINK[i], A_LINK[i], neigs[0]]
-            dihed = dihedral(coos[ti], coos[tj], coos[tk], coos[tl])
+            if tl is None:
+               # Widen to any other already-placed atom in the molecule --
+               # covers e.g. the middle of a linear C#C-C#C chain, where
+               # neither A_LINK[i]'s nor B_LINK[i]'s direct neighbors offer
+               # an off-axis choice.
+               tl = next((j for j in sorted(G_mol.nodes())
+                          if j not in (i, B_LINK[i], A_LINK[i])
+                          and not _is_degenerate_angle(coos[B_LINK[i]], coos[A_LINK[i]], coos[j])),
+                         None)
+            if tl is None:
+               # Fully linear molecule (e.g. a bare polyyne): nothing in it
+               # is off the shared axis, so there is no better choice left --
+               # fall back to the original candidate order.
+               tl = neigs_lt_i[0] if len(neigs_lt_i) > 0 else fallback[0]
+            [ti, tj, tk, tl] = [i, B_LINK[i], A_LINK[i], tl]
+            # dihedral() takes cross(v12,v01) and cross(v12,v32); either one
+            # is zero-length -- a ZeroDivisionError in Mol_angle -- if
+            # ti-tj-tk or tj-tk-tl is collinear. The A_LINK/tl selection
+            # above already avoids that whenever a non-degenerate choice
+            # exists anywhere in the molecule; this only remains possible
+            # for a molecule with no off-axis atom at all (e.g. a bare
+            # polyyne, where every atom including the terminal H's sits on
+            # one straight line). There BOSS's own optimizer treats the
+            # initial dihedral value as a free variable it refines anyway
+            # (the same convention print_ZMAT already uses for the leading
+            # dummy atoms' placeholder torsions above), so fall back to a
+            # fixed placeholder instead of dividing by zero.
+            if (_is_degenerate_angle(coos[ti], coos[tj], coos[tk]) or
+                    _is_degenerate_angle(coos[tj], coos[tk], coos[tl])):
+                dihed = 0.00
+            else:
+                dihed = dihedral(coos[ti], coos[tj], coos[tk], coos[tl])
             Z_TORSIONS[i + 2] = (ti + 2, tj + 2, tk + 2, tl + 2, dihed)
         n_ats += 1
     Z_Ad_B, Z_Ad_A, Z_Ad_T = Get_Add_Int(

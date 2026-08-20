@@ -1,0 +1,30 @@
+; Single-point energy evaluation, molecule centered in a large (5nm) box
+; with periodic images far enough apart that a 2nm cutoff never reaches
+; them -- the closest approximation to an isolated/vacuum evaluation the
+; modern Verlet scheme (which requires full PBC -- pbc=no is rejected
+; outright: "With Verlet lists only full pbc or pbc=xy with walls is
+; supported") allows, matching OpenMM's NoCutoff isolated-molecule
+; treatment and BOSS's own gas-phase (NMOL=0) single-point energy as
+; closely as GROMACS permits. See eval_gromacs_energy.sh, which enlarges
+; the input .gro's box to 5nm before using this file.
+integrator      = md
+nsteps          = 0
+cutoff-scheme   = Verlet
+pbc             = xyz
+verlet-buffer-tolerance = -1
+rlist           = 2.0
+rcoulomb        = 2.0
+rvdw            = 2.0
+coulombtype     = cutoff
+vdwtype         = cutoff
+constraints     = none
+; Without this, grompp constrains bond lengths to match the .gro
+; coordinates before the single nsteps=0 "step" -- fine for a real MD run,
+; but it silently changes the starting geometry out from under a
+; single-point energy evaluation.
+continuation    = yes
+; Vacuum (non-periodic-in-spirit) systems: unconstrained rotation/
+; translation of the center of mass is a real degree of freedom GROMACS
+; otherwise warns about ("flying ice cube"). Harmless for a single nsteps=0
+; evaluation either way, but keeps the note quiet.
+comm_mode       = ANGULAR

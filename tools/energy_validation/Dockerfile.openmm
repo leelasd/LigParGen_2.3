@@ -1,0 +1,9 @@
+# Adds OpenMM to the base ligpargen:dev CLI image, for single-point energy
+# evaluation of generated .xml/.pdb pairs. See ../README.md.
+#
+# Build (after building ligpargen:dev per the main repo's build.sh):
+#   docker build -f Dockerfile.openmm -t ligpargen-openmm:dev .
+FROM ligpargen:dev
+USER root
+RUN pip install --no-cache-dir openmm
+ENTRYPOINT ["/bin/bash"]

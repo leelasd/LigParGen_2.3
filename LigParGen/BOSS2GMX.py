@@ -16,7 +16,7 @@ numpy
 
 from LigParGen.BOSSReader import ucomb,pairing_func
 from LigParGen.BOSSReader import Refine_PDB_file,get_coos_from_pdb
-from LigParGen.boss_common import bossData, pair_declared_torsions
+from LigParGen.boss_common import bossData, pair_declared_torsions, translate_zmat_indices
 import pickle
 import pandas as pd
 import numpy as np
@@ -85,7 +85,7 @@ def gmxImp(df):
     return (odihed)
 
 
-def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, itpf):
+def boss2opmTorsion(bnd_df, num2opls, zmat_idx_map, molecule_data, itpf):
     ats = []
     for line in molecule_data.MolData['ATOMS'][3:]:
         dt = [line.split()[0], line.split()[4],
@@ -98,16 +98,21 @@ def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, itpf):
 
     paired_ats, paired_dhd = pair_declared_torsions(molecule_data, ats)
 
-    dhd = np.array(paired_dhd)
-    dhd = dhd * 4.184  # kcal to kj conversion
-    dhd = dhd  # Komm = Vopls/2
-    dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
-    ats = np.array(paired_ats) - st_no
-    for i in range(len(ats)):
-        for j in range(len(ats[0])):
-            if ats[i][j] < 0:
-                ats[i][j] = 0
-    at_df = pd.DataFrame(ats, columns=['I', 'J', 'K', 'L'])
+    if len(paired_dhd) == 0:
+        # A molecule with no torsions at all (e.g. water, or a bare
+        # monatomic ion) makes paired_dhd/paired_ats empty lists --
+        # np.array([]) has shape (0,), which pd.DataFrame(..., columns=[4
+        # names]) can't reshape into, so build the (correctly empty)
+        # DataFrames directly instead of through the array conversion.
+        dhd_df = pd.DataFrame(columns=['V1', 'V2', 'V3', 'V4'])
+        at_df = pd.DataFrame(columns=['I', 'J', 'K', 'L'])
+    else:
+        dhd = np.array(paired_dhd)
+        dhd = dhd * 4.184  # kcal to kj conversion
+        dhd = dhd  # Komm = Vopls/2
+        dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
+        ats = np.array([translate_zmat_indices(row, zmat_idx_map) for row in paired_ats])
+        at_df = pd.DataFrame(ats, columns=['I', 'J', 'K', 'L'])
     final_df = pd.concat([dhd_df, at_df], axis=1)
     final_df = final_df.reindex(at_df.index)
     bndlist = list(bnd_df.UR) + (list(bnd_df.UR))
@@ -132,10 +137,10 @@ def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, itpf):
         return final_df, final_df
 
 
-def boss2gmxBond(molecule_data, st_no, itpf):
+def boss2gmxBond(molecule_data, zmat_idx_map, itpf):
     bdat = molecule_data.MolData['BONDS']
-    bdat['cl1'] = [x - st_no if not x - st_no < 0 else 0 for x in bdat['cl1']]
-    bdat['cl2'] = [x - st_no if not x - st_no < 0 else 0 for x in bdat['cl2']]
+    bdat['cl1'] = translate_zmat_indices(bdat['cl1'], zmat_idx_map)
+    bdat['cl2'] = translate_zmat_indices(bdat['cl2'], zmat_idx_map)
     bnd_df = pd.DataFrame(bdat)
     bnd_df['KIJ'] = bnd_df['KIJ'] * 836.80
     bnd_df['RIJ'] = bnd_df['RIJ'] * 0.10
@@ -155,11 +160,11 @@ def boss2gmxBond(molecule_data, st_no, itpf):
     return full_bnd, connects
 
 
-def boss2gmxAngle(anglefile, num2opls, st_no, itpf):
+def boss2gmxAngle(anglefile, num2opls, zmat_idx_map, itpf):
     adat = anglefile
-    adat['cl1'] = [x - st_no if not x - st_no < 0 else 0 for x in adat['cl1']]
-    adat['cl2'] = [x - st_no if not x - st_no < 0 else 0 for x in adat['cl2']]
-    adat['cl3'] = [x - st_no if not x - st_no < 0 else 0 for x in adat['cl3']]
+    adat['cl1'] = translate_zmat_indices(adat['cl1'], zmat_idx_map)
+    adat['cl2'] = translate_zmat_indices(adat['cl2'], zmat_idx_map)
+    adat['cl3'] = translate_zmat_indices(adat['cl3'], zmat_idx_map)
     ang_df = pd.DataFrame(adat)
     ang_df = ang_df[ang_df.K > 0]
     ang_df['K'] = 8.3680 * ang_df['K']
@@ -196,7 +201,7 @@ def boss2gmxAtom(resid, num2typ2symb, Qs, itpf):
 
 
 def boss2gmx(resid, molecule_data, pdb_file):
-    types, Qs, num2opls, st_no, num2typ2symb, num2pqrtype = bossData(
+    types, Qs, num2opls, zmat_idx_map, num2typ2symb, num2pqrtype = bossData(
         molecule_data)
     itpf = open(resid + '.itp', 'w+')
     itpf.write("""
@@ -213,9 +218,9 @@ def boss2gmx(resid, molecule_data, pdb_file):
     atty = list(set(atty))
     for att in atty:
         itpf.write('%s' % att)
-    bnd_df, connects = boss2gmxBond(molecule_data, st_no, itpf)
+    bnd_df, connects = boss2gmxBond(molecule_data, zmat_idx_map, itpf)
     full_ang = boss2gmxAngle(molecule_data.MolData[
-        'ANGLES'], num2opls, st_no, itpf)
+        'ANGLES'], num2opls, zmat_idx_map, itpf)
     itpf.write('[ moleculetype ]\n')
     itpf.write('; Name               nrexcl\n')
     itpf.write('%s                   3\n' % resid)
@@ -233,8 +238,21 @@ def boss2gmx(resid, molecule_data, pdb_file):
         itpf.write('%5d %5d %5d %5d %10.3f %10.3f\n' %
                    (angs['cl1'] + 1, angs['cl2'] + 1, angs['cl3'] + 1, 1, angs['R'], angs['K']))
     full_tor, tor_df = boss2opmTorsion(
-        bnd_df, num2opls, st_no, molecule_data, itpf)
-    if len(tor_df.index) != len(full_tor.index):
+        bnd_df, num2opls, zmat_idx_map, molecule_data, itpf)
+    # This used to be gated on `len(tor_df.index) != len(full_tor.index)`
+    # -- i.e. only write the [ dihedrals ] section at all if type-based
+    # deduplication happened to remove at least one row. tor_df (the
+    # deduplicated set) is never actually used for writing below (both
+    # loops read from full_tor); that comparison was only ever consulted
+    # for this gate. Whenever a molecule's declared torsions all already
+    # had distinct type-class names -- confirmed directly for a real
+    # toluene run via the live Space, k2=15.167 ring torsions and
+    # k2=10.46 planarity-enforcing impropers included -- tor_df and
+    # full_tor come out the same length, the condition was false, and the
+    # entire section silently never got written: every proper and
+    # improper torsion missing from the GROMACS output, for any molecule
+    # whose torsions don't happen to contain a same-type-class repeat.
+    if len(full_tor.index) > 0:
         itpf.write('\n[ dihedrals ]\n')
         itpf.write('; IMPROPER DIHEDRAL ANGLES \n')
         itpf.write(
