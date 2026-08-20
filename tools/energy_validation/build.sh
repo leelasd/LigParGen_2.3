@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the three derived validation images on top of the main repo's own
+# Builds the derived validation images on top of the main repo's own
 # ligpargen:dev (build that one first with the main repo's ./build.sh --
 # see ../README.md).
 set -euo pipefail
@@ -29,4 +29,7 @@ docker build -f Dockerfile.lammps --platform linux/amd64 -t ligpargen-lammps:dev
 echo "Building ligpargen-tinker:dev (compiles TINKER from source -- slower, a few minutes)..."
 docker build -f Dockerfile.tinker --platform linux/amd64 -t ligpargen-tinker:dev .
 
-echo "Done. All four images are ready -- see ../README.md for how to run a comparison."
+echo "Building ligpargen-q:dev (compiles Q6 from source)..."
+docker build -f Dockerfile.q --platform linux/amd64 -t ligpargen-q:dev .
+
+echo "Done. All five images are ready -- see ../README.md for how to run a comparison."

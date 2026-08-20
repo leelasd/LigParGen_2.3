@@ -22,17 +22,22 @@ import numpy as np
 
 
 def retDihedImp(df):
-    odihed = []
-    if np.sum([df['V' + str(pot)] for pot in range(1, 5)]) != 0.0:
-        for pot in range(1, 5):
-            if (df['V' + str(pot)] != 0.0):
-                odihed.append('%s %8.5f %2d %4.5f \n' % (df['NAME'].replace(
-                    "-", "   "), 2.0*df['V' + str(pot)], pot, 180.00 * abs(pot % 2 - 1)))
-    else:
-        pot = 2
-        odihed.append('%s %8.5f %2d %4.5f \n' % (df['NAME'].replace(
-            "-", "   "), 2.0*df['V' + str(pot)], pot, 180.00 * abs(pot % 2 - 1)))
-    return (odihed)
+    # Q's own periodic-improper energy term (bondene.f90's improper2)
+    # hardcodes the multiplicity to 2 (arg = 2*phi - imp0), and its
+    # [impropers] parameter line has exactly TWO numeric fields -- force
+    # constant and phase -- with no periodicity column (confirmed directly
+    # against Q6's own prep.f90 reader: `read(line, *, ...) taci, tacj,
+    # tack, tacl, imp_prm(i)%prm`, where imp_prm(i)%prm's type -- fk, imp0
+    # -- has only those two real components). Writing a third (periodicity)
+    # field here, as the CHARMM/other-format writers do, silently misaligns
+    # columns: Q's list-directed read binds our periodicity placeholder to
+    # imp0 (the phase) and never reads our real phase value at all --
+    # confirmed directly (produced ~60 kcal/mol of spurious improper energy
+    # for benzene's perfectly planar ring, where BOSS's own energy is
+    # exactly 0). This also means Q can only represent OPLS-AA's n=2
+    # improper term (V2) -- the only term BOSS's own impropers ever
+    # populate in practice.
+    return ['%s %8.5f %4.5f \n' % (df['NAME'].replace("-", "   "), 2.0*df['V2'], 180.00)]
 
 
 def retDihed(df):
@@ -69,14 +74,58 @@ def Boss2CharmmPRM(resid, num2typ2symb, Qs, bnd_df, ang_df, tor_df):
     #### COLLECTING NONBONDING PART #######
     prm = open(resid + '.Q.prm', 'w+')
     prm.write('# generated Q-PARAM file for Aqvist group (by Leela Dodda)\n')
+    # Q's own parameter reader (Qprep6's readprm) hard-requires vdw_rule in
+    # [options] and rejects the WHOLE file without it ("vdw_rule in options
+    # section not found") -- confirmed directly, an empty [options] section
+    # silently drops every bond/angle/torsion/atom_type below it too, not
+    # just vdW. scale_14/switch_atoms/improper_potential/
+    # improper_definition match the real Qoplsaa.prm reference file
+    # bundled with Q6's own test suite. improper_definition explicit is
+    # required for OPLS-AA specifically: without it Qprep6 auto-generates
+    # its own GROMOS-style improper for every sp2/3-connected ring atom,
+    # double-counting the planarity restraint OPLS-AA already bakes into
+    # the *proper* torsion Fourier series for those same ring atoms.
     prm.write('\n[options]\n')
+    prm.write('name Q-OPLSAA\n')
+    prm.write('type AMBER\n')
+    prm.write('vdw_rule geometric\n')
+    prm.write('scale_14 0.5\n')
+    prm.write('switch_atoms on\n')
+    prm.write('improper_potential periodic\n')
+    prm.write('improper_definition explicit\n')
     prm.write('\n[atom_types]\n')
-    for i in range(len(Qs)): 
+    # Q's [atom_types] reader (Qprep6) rejects a repeated type NAME
+    # outright ("Could not enumerate atom type ... Duplicate name?"), and
+    # that rejection corrupts every atom's type-index assignment for the
+    # rest of the topology build ("Inconsistent molecule/residue start
+    # atoms", every bond/angle/torsion count coming out 0) -- confirmed
+    # directly. Unlike the CHARMM/TINKER/LAMMPS writers, which give every
+    # atom its own row (fine there -- those readers don't reject
+    # duplicates), Q needs exactly one declaration per unique OPLS type.
+    seen_types = set()
+    for i in range(len(Qs)):
+        typename = num2typ2symb[i][2]
+        if typename in seen_types:
+            continue
+        seen_types.add(typename)
         eps = float(Qs[i][3])
         sig = float(Qs[i][2])
         ALJ = 2*sig**6*np.sqrt(eps)
         BLJ = 2*sig**3*np.sqrt(eps)
-        prm.write('%4s %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f\n'%(num2typ2symb[i][2],ALJ,ALJ,BLJ,BLJ,0.000,num2typ2symb[i][4]))
+        # Q's own [atom_types] row format (confirmed against the real
+        # Qoplsaa.prm reference file and Q6's own prep.f90 parser) is
+        # Avdw1 Avdw2 Bvdw1 Avdw3 Bvdw2&3 mass -- Avdw3/Bvdw2&3 are the
+        # SEPARATE 1-4-scaled LJ A/B values Q uses for 1-4 pairs (its own
+        # `precompute_set_values_pp` combines them by direct multiplication,
+        # not sqrt, so storing them pre-scaled by sqrt(0.5) here makes the
+        # combined pairwise A_14/B_14 come out scaled by the correct 0.5 --
+        # matching OPLS-AA's 1-4 LJ scaling, the same 0.5 already used for
+        # electrostatics via scale_14 above). Writing BLJ/0.000 here
+        # (repeating the normal B value into the A_14 slot, zeroing B_14)
+        # made every 1-4 LJ interaction wrong -- confirmed directly: total
+        # vdW energy came out negative instead of matching BOSS.
+        half_sqrt = 0.7071067811865476  # sqrt(0.5)
+        prm.write('%4s %10.4f %10.4f %10.4f %10.4f %10.4f %10.4f\n'%(typename,ALJ,ALJ,BLJ,half_sqrt*ALJ,half_sqrt*BLJ,num2typ2symb[i][4]))
     prm.write('\n[bonds]\n')
     for i in bnd_df.index:
         prm.write('%s %6s %8.1f %8.4f \n' % (num2typ2symb[bnd_df.cl1[i]][

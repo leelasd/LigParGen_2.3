@@ -1,4 +1,4 @@
-# BOSS vs. OpenMM/GROMACS/NAMD/LAMMPS/TINKER single-point energy validation, and a documented residual
+# BOSS vs. OpenMM/GROMACS/NAMD/LAMMPS/TINKER/Q single-point energy validation, and a documented residual
 
 The reusable methodology, scripts, Dockerfiles, and full gotcha list for reproducing or extending this validation live in [`tools/energy_validation/`](../../tools/energy_validation/README.md) -- read that first if you're running this again rather than just reading about what it already found.
 
@@ -166,4 +166,40 @@ This is not a regression from this session's own work: the pre-refactor `BOSS2OP
 | LAMMPS | -2.2925 | 0.2156 | 0.0409 | ~0.0 | -2.5490 |
 | TINKER | -2.2955 | 0.2106 | 0.0404 | 0.0 | -2.5465 |
 
-All within the same tolerance already established for the toluene/anisole-excluded set. `docs/agents`/future sessions extending this methodology to Q, XPLOR, or DESMOND should use freshly-generated Zmatrices (via the live Space or `-s <SMILES>`), not the legacy `molecules/small/*.z` reference library, for any molecule where the improper-torsion code path matters -- the reference library's degenerate declarations (confirmed now for `toluen.z`, `benzen.z`, and `phenol.z`) make it systematically unable to catch bugs in that path.
+All within the same tolerance already established for the toluene/anisole-excluded set. `docs/agents`/future sessions extending this methodology to XPLOR or DESMOND should use freshly-generated Zmatrices (via the live Space or `-s <SMILES>`), not the legacy `molecules/small/*.z` reference library, for any molecule where the improper-torsion code path matters -- the reference library's degenerate declarations (confirmed now for `toluen.z`, `benzen.z`, and `phenol.z`) make it systematically unable to catch bugs in that path.
+
+## Extending to Q: three real writer bugs, none previously exercised
+
+Q (the Aqvist lab's MD engine, `qusers/Q6` on GitHub) is free and open source (GPL-style) -- unlike CNS/X-PLOR and Desmond, which are both registration-gated and out of scope for now. `Dockerfile.q` builds it from source with `gfortran`+`make`; see `tools/energy_validation/README.md`'s "The Q leg" for the full build/run notes. This was also what surfaced the ucomb() classification bug above: a direct challenge to this document's own "benzene has zero impropers" claim, while investigating why Q's `[impropers]` section was empty, is what led to tracing that claim back to its degenerate reference-file source.
+
+`LigParGen/BOSS2Q.py` had never actually been run through a real Q build before -- every bug below was a first-contact failure, not a regression. All three are in `Boss2CharmmPRM()`:
+
+**Bug 1 -- empty `[options]` section.** Q's own parameter reader hard-requires `vdw_rule` in `[options]` and rejects the *entire* file without it ("vdw_rule in options section not found"), which silently drops every bond/angle/torsion/atom_type below it too, not just vdW. Fixed by writing a complete `[options]` block (`vdw_rule geometric`, `scale_14 0.5`, `improper_potential periodic`, `improper_definition explicit`, matching the real bundled `Qoplsaa.prm` reference file). `improper_definition explicit` specifically is required for OPLS-AA: without it, Qprep6 auto-generates its own GROMOS-style improper for every sp2/3-connected ring atom via geometry, double-counting the planarity restraint OPLS-AA already bakes into the *proper* torsion Fourier series for those same ring atoms.
+
+**Bug 2 -- one `[atom_types]` row per atom instead of per unique type.** Q rejects a repeated type *name* outright ("Could not enumerate atom type... Duplicate name?"), and that rejection corrupts every atom's type-index assignment for the rest of the topology build (every bond/angle/torsion count coming out 0, "Inconsistent molecule/residue start atoms"). Fixed by deduplicating to one row per unique OPLS type name -- CHARMM/TINKER/LAMMPS deliberately keep one row per atom, since those readers don't reject duplicates.
+
+**Bug 3 -- wrong 1-4 LJ columns.** Q's `[atom_types]` row format is `name Avdw1 Avdw2 Bvdw1 Avdw3 Bvdw2&3 mass`, confirmed by reading Q's own Fortran source directly (`prep.f90`'s `[atom_types]` reader, `simprep.f90`'s `precompute_set_values_pp`) -- `Avdw3`/`Bvdw2&3` are *separate*, already-1-4-scaled LJ A/B values (Q combines them by direct multiplication, not `sqrt`, unlike its normal-LJ combining rule). The writer had been repeating the normal `B` value into the `Avdw3` slot and zeroing `Bvdw2&3`, which made every 1-4 LJ interaction wrong -- confirmed directly: total vdW energy came out negative instead of matching BOSS. Fixed by computing `sqrt(0.5)*ALJ`/`sqrt(0.5)*BLJ` for those two columns, baking in OPLS-AA's 0.5 1-4 LJ scale factor. Verified against the real bundled `Qoplsaa.prm`'s own CA row values, which matched to 3+ significant figures.
+
+**Bug 4 -- found after the ucomb() fix restored real impropers -- extra column in `[impropers]`.** Once benzene's 6 genuine improper torsions were correctly classified (see above) and written out, Q's total energy came out at 67.92 kcal/mol against BOSS's 7.9372328 -- bond and nonbonded matched almost exactly, but torsion alone was +59.98 against BOSS's 0.0, for a molecule sitting exactly at its planar equilibrium. Traced (via Q's own Fortran source, `bondene.f90`'s `improper2` function) to Q's periodic-improper energy term hardcoding the multiplicity to 2 (`arg = 2.0*calc%angl - imp_lib(ic)%imp0`, no periodicity variable anywhere in the formula) and its `[impropers]` parameter-line reader (`prep.f90`) expecting exactly two numeric fields per line -- force constant and phase -- read positionally via `read(line, *, ...) taci, tacj, tack, tacl, imp_prm(i)%prm`, where `imp_prm(i)%prm`'s type has only `fk, imp0` as members. The writer (`retDihedImp()`) had been emitting three numeric fields (force, periodicity, phase), matching the CHARMM/other-format convention -- Q's list-directed read silently bound the periodicity placeholder (`2`) to `imp0` and never read the real phase (`180.0`) at all. Fixed by dropping the periodicity column entirely; this also means Q can only represent OPLS-AA's `n=2` improper term, which is the only term BOSS's own impropers ever populate in practice.
+
+**Post-fix result, fresh benzene** (kcal/mol; BOSS total 7.9372328, bond=0.2214, angle=0.0, torsion=0.0, nonbonded=7.72):
+
+| engine | total | bond | angle | torsion(+improper) | nonbonded |
+|---|---|---|---|---|---|
+| OpenMM | 7.9149 | 0.2144 | 0.0001 | 0.0 | 7.7004 |
+| GROMACS | 8.0084 | 0.2354 | 0.0104 | 0.0 | 7.7626 |
+| LAMMPS | 7.9372 | 0.2171 | 0.0001 | ~0.0 | 7.7200 |
+| TINKER | 7.9389 | 0.2215 | 0.0 | 0.0 | 7.7174 |
+| Q | 7.94 | 0.21 | 0.0 | 0.0 | 7.73 |
+
+**Post-fix result, fresh phenol** (kcal/mol; BOSS total -2.292973, bond=0.2106, angle=0.0404, torsion=0.0, nonbonded=-2.54):
+
+| engine | total | bond | angle | torsion(+improper) | nonbonded |
+|---|---|---|---|---|---|
+| OpenMM | -2.2847 | 0.2113 | 0.0406 | 0.0 | -2.5366 |
+| GROMACS | -2.1891 | 0.3204 | 0.0719 | 0.0 | -2.5814 |
+| LAMMPS | -2.2925 | 0.2156 | 0.0409 | ~0.0 | -2.5490 |
+| TINKER | -2.2955 | 0.2106 | 0.0404 | 0.0 | -2.5465 |
+| Q | -2.29 | 0.21 | 0.04 | 0.0 | -2.54 |
+
+Q joins OpenMM/GROMACS/LAMMPS/TINKER within the same tolerance already established for the toluene/anisole-excluded set. Of the three engines this codebase set out to validate, only XPLOR and DESMOND remain untested -- both registration-gated, unlike Q.

@@ -45,27 +45,28 @@ person who wrote this tool's own past cross-code validation work:
    ```bash
    ./build.sh /path/to/your/boss/install
    ```
-2. Build the four derived validation images (adds OpenMM via pip, GROMACS
-   via `apt-get`, LAMMPS via `apt-get`, and TINKER built from source via
-   `git clone` + `cmake` -- all freely available, no license needed
-   beyond what `ligpargen:dev` already required). On a non-amd64 host
-   (e.g. Apple Silicon), `build.sh` passes `--platform linux/amd64` for
-   you -- `ligpargen:dev` itself is amd64-only (BOSS is a 32-bit x86
-   binary). The TINKER image takes a few minutes (compiling ~300 Fortran
-   files from source -- see "The TINKER leg" below):
+2. Build the five derived validation images (adds OpenMM via pip, GROMACS
+   via `apt-get`, LAMMPS via `apt-get`, TINKER built from source via
+   `git clone` + `cmake`, and Q built from source via `git clone` +
+   `gfortran`/`make` -- all freely available, no license needed beyond
+   what `ligpargen:dev` already required). On a non-amd64 host (e.g.
+   Apple Silicon), `build.sh` passes `--platform linux/amd64` for you --
+   `ligpargen:dev` itself is amd64-only (BOSS is a 32-bit x86 binary).
+   The TINKER image takes a few minutes (compiling ~300 Fortran files
+   from source -- see "The TINKER leg" below):
    ```bash
    cd tools/energy_validation
    ./build.sh
    ```
    This produces `ligpargen-openmm:dev`, `ligpargen-gmx:dev`,
-   `ligpargen-lammps:dev`, and `ligpargen-tinker:dev`.
+   `ligpargen-lammps:dev`, `ligpargen-tinker:dev`, and `ligpargen-q:dev`.
 3. (Optional) For the NAMD leg, get your own licensed NAMD install (not
    Dockerized -- see "The NAMD leg" below) and point `NAMD_DIR` at it:
    ```bash
    export NAMD_DIR=/path/to/your/namd/install   # containing namd3, psfgen
    ```
    Leave `NAMD_DIR` unset to skip NAMD and just get the
-   BOSS/OpenMM/GROMACS/LAMMPS/TINKER five-way comparison.
+   BOSS/OpenMM/GROMACS/LAMMPS/TINKER/Q six-way comparison.
 
 ## Running a comparison
 
@@ -305,6 +306,78 @@ closely" set from `docs/adr/0006`) were run through this NAMD leg and
 matched BOSS/OpenMM/GROMACS to within the same tolerance as the other two
 engines -- see `docs/adr/0006`'s NAMD section for the numbers.
 
+## The Q leg
+
+Q (the Aqvist lab's MD engine, `qusers/Q6` on GitHub) is free and open
+source (GPL-style), unlike CNS/X-PLOR and Desmond -- `Dockerfile.q` builds
+it from source with `gfortran`+`make`. The topology/energy pipeline is
+two Q programs, not one: `Qprep6` (`q_prep_template.inp`) reads
+LigParGen's `.lib`+`.Q.prm` and a PDB, builds a topology (`mt`), and
+writes it out (`wt`); `Qdyn6` (`q_sp_template.inp`) reads that topology
+and actually evaluates the energy. `eval_q_energy.sh` drives both and
+parses `Qdyn6`'s "Energy summary at step 0" block, printed **before** its
+one integration step runs -- a genuine single-point evaluation of the
+input geometry.
+
+Several real gotchas, all either worked around in the eval script or
+fixed in `LigParGen/BOSS2Q.py` itself (not pre-existing writer bugs --
+`BOSS2Q.py` had simply never been exercised against a real Q run before):
+
+- **Qprep6's PDB reader** doesn't understand `TER`/`CONECT`/`END`/`REMARK`
+  lines -- their presence makes it miscount "0 molecules" instead of 1,
+  corrupting topology assembly. `eval_q_energy.sh` strips the PDB to
+  `^ATOM` lines only before handing it to `Qprep6`.
+- **Qdyn6 has no true `steps=0` single-point mode** ("Need at least one
+  step of dynamics") and refuses `temperature=0` ("No dynamics at zero
+  temperature!"). Worked around with `steps=1`, `temperature=0.001` --
+  the pre-integration "Energy summary at step 0" block is unaffected by
+  the one tiny step that follows it.
+- **`BOSS2Q.py`'s `[options]` section was empty.** Q's own parameter
+  reader hard-requires `vdw_rule` in `[options]` and rejects the *whole*
+  file without it, silently dropping every bond/angle/torsion/atom_type
+  below it too. Fixed by writing a complete `[options]` block, including
+  `improper_definition explicit` (below).
+- **`BOSS2Q.py`'s `[atom_types]` section wrote one row per atom.** Q
+  rejects a repeated type *name* outright ("Could not enumerate atom
+  type... Duplicate name?"), and that rejection corrupts every atom's
+  type-index assignment for the rest of the topology build. Fixed by
+  deduplicating to one row per unique OPLS type name (CHARMM/TINKER/
+  LAMMPS give every atom its own row deliberately -- fine there, since
+  those readers don't reject duplicates).
+- **`BOSS2Q.py`'s 1-4 LJ columns were wrong.** Q's `[atom_types]` row
+  format is `name Avdw1 Avdw2 Bvdw1 Avdw3 Bvdw2&3 mass`, where
+  `Avdw3`/`Bvdw2&3` are *separate*, already-1-4-scaled LJ A/B values (Q's
+  own `precompute_set_values_pp` combines them by direct multiplication,
+  not `sqrt`). The writer had been repeating the normal `B` value into
+  the `Avdw3` slot and zeroing `Bvdw2&3`, which made every 1-4 LJ
+  interaction wrong (total vdW energy came out negative instead of
+  matching BOSS). Fixed by computing `sqrt(0.5)*ALJ`/`sqrt(0.5)*BLJ` for
+  those two columns, baking in OPLS-AA's 0.5 1-4 LJ scale factor -- the
+  same value the real bundled `Qoplsaa.prm` reference file uses.
+- **`improper_definition explicit` is required for OPLS-AA.** Without
+  it, Qprep6 auto-generates its own GROMOS-style improper for every
+  sp2/3-connected ring atom via geometry, double-counting the planarity
+  restraint OPLS-AA already bakes into the *proper* torsion Fourier
+  series for those same ring atoms.
+- **`BOSS2Q.py`'s `[impropers]` lines had an extra column.** Q's own
+  periodic-improper energy term hardcodes the multiplicity to 2 (its
+  source computes `arg = 2*phi - imp0`, with no periodicity term at
+  all), and its parameter-file reader expects exactly two numeric fields
+  per line -- force constant and phase, read positionally. The writer
+  was emitting three (force, periodicity, phase), so Q's read silently
+  bound the periodicity placeholder to the phase and never read the real
+  phase value -- confirmed directly: ~60 kcal/mol of spurious improper
+  energy for benzene's perfectly planar ring, where BOSS's own energy is
+  exactly 0. Fixed by dropping the periodicity column. This also means Q
+  can only represent OPLS-AA's `n=2` improper term, which is the only
+  term BOSS's own impropers ever populate in practice.
+
+**Validated**: benzene and phenol (fresh, non-degenerate Zmatrices --
+see `docs/adr/0006`'s note on the legacy-reference-file gap) matched
+BOSS/OpenMM/GROMACS/LAMMPS/TINKER to the same tolerance as the other
+engines once all of the above were fixed. See `docs/adr/0006`'s Q
+section for the numbers.
+
 ## Known gotchas (each one real, each one hit while building this)
 
 **GROMACS, general:**
@@ -378,15 +451,18 @@ unevenness, confirmed directly (not assumed) more than once this session:
 
 ## What's not covered yet
 
-**Other output formats** (`.Q.prm`/Q, `.top`+`.param`/XPLOR, `.cms`/
-DESMOND): not energy-validated at all yet. Two real bugs this methodology
-found so far (GROMACS's silently-omitted `[ dihedrals ]`, TINKER's
-mismatched atom-type numbering) were each specific to their own writer's
-code (confirmed via `grep`/direct inspection that no other writer has the
-identical broken pattern) -- but that doesn't mean the remaining three are
-correct, only that they weren't specifically checked yet. Each would need
-its own `eval_<format>_energy.*` script analogous to the ones here, using
+**Other output formats** (`.top`+`.param`/XPLOR, `.cms`/DESMOND): not
+energy-validated at all yet, and unlike Q, both are registration-gated
+rather than freely downloadable, so validating them needs that access
+sorted out first. Bugs this methodology has found so far (GROMACS's
+silently-omitted `[ dihedrals ]`, TINKER's mismatched atom-type
+numbering, and Q's `[options]`/`[atom_types]`/1-4-LJ/`[impropers]`
+issues) were each specific to their own writer's code (confirmed via
+`grep`/direct inspection that no other writer has the identical broken
+pattern) -- but that doesn't mean XPLOR/DESMOND are correct, only that
+they weren't specifically checked yet. Each would need its own
+`eval_<format>_energy.*` script analogous to the ones here, using
 whatever engine reads that format natively -- and, per the pattern
-established by NAMD/TINKER/LAMMPS/GROMACS above, would need that engine's
-own licensing/availability checked before assuming it's as easy to add as
-the free-and-open ones were.
+established by NAMD/TINKER/LAMMPS/GROMACS/Q above, would need that
+engine's own licensing/availability checked before assuming it's as easy
+to add as the free-and-open ones were.

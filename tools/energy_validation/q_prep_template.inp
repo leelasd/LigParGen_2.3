@@ -1,0 +1,8 @@
+rl __RESID__.lib
+rff __RESID__.Q.prm
+rp __RESID___stripped.pdb
+boundary sphere 0.0 0.0 0.0 50.0
+mt __RESID___q
+wt __RESID___q.top
+wp __RESID___q_out.pdb y
+quit

@@ -31,6 +31,7 @@ from LigParGen.BOSS2GMX import mainBOSS2GMX
 from LigParGen.BOSS2CHARMM import mainBOSS2CHARMM
 from LigParGen.BOSS2LAMMPS import mainBOSS2LAMMPS
 from LigParGen.BOSS2TINKER import mainBOSS2TINKER
+from LigParGen.BOSS2Q import mainBOSS2Q
 
 resid = sys.argv[1]
 zmat_src = sys.argv[2]
@@ -81,4 +82,5 @@ mainBOSS2GMX(resid, False)
 mainBOSS2CHARMM(resid)
 mainBOSS2LAMMPS(resid)
 mainBOSS2TINKER(resid)
-print('WROTE_FILES %s.xml %s.pdb %s.itp %s.gro %s.rtf %s.prm %s.lmp %s.new.xyz %s.key' % (resid, resid, resid, resid, resid, resid, resid, resid, resid))
+mainBOSS2Q(resid)
+print('WROTE_FILES %s.xml %s.pdb %s.itp %s.gro %s.rtf %s.prm %s.lmp %s.new.xyz %s.key %s.lib %s.Q.prm' % (resid, resid, resid, resid, resid, resid, resid, resid, resid, resid, resid))
