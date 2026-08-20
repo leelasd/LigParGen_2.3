@@ -204,13 +204,33 @@ def pairing_func(a, b):
 
 
 def ucomb(vec, blist):
+    """Chain-adjacency check for a declared dihedral quadruple [i, j, k, l]:
+    counts how many of the three CONSECUTIVE pairs -- (i,j), (j,k), (k,l) --
+    are real bonds. Every caller compares this to 3 to decide "Proper"
+    (a genuine bonded chain) vs "Improper" (typically a hub atom bonded to
+    the other three, with those three not bonded to each other).
+
+    This used to count bonded pairs among all 6 possible pairs of the 4
+    atoms, not just the 3 consecutive ones -- but a hub/star quadruple also
+    has exactly 3 bonded pairs among its 6 (hub-to-each-substituent), so
+    that count alone could never actually distinguish a chain from a star;
+    every BOSS-declared quadruple (chain or star) has exactly 3 real bonds
+    among its 4 atoms by construction, so the old check was structurally
+    always true. Confirmed directly: benzene's real ring impropers (a
+    hub atom bonded to its two ring neighbors and its H) satisfied the old
+    count-of-6 test, so every writer sharing this function silently
+    labelled every improper as a Proper torsion instead. Checking
+    specifically for the 3 CONSECUTIVE pairs fixes this: a star's
+    non-hub-adjacent pair (e.g. the two substituents on either side of the
+    hub, when the hub isn't in position 2 or 3) is never a real bond, so
+    the consecutive-pair count comes out below 3 for a genuine improper.
+    """
+    i, j, k, l = vec
     res = 0
-    for a in vec:
-        vec.remove(a)
-        for b in vec:
-            ans = (a + b) * (a + b + 1) * 0.5
-            if (ans + a in blist) or (ans + b in blist):
-                res = res + 1
+    for a, b in ((i, j), (j, k), (k, l)):
+        ans = (a + b) * (a + b + 1) * 0.5
+        if (ans + a in blist) or (ans + b in blist):
+            res = res + 1
     return res
 
 

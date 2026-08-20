@@ -131,4 +131,39 @@ Extended the same methodology to TINKER (source freely available on GitHub, BSD-
 | phenol nonbonded | 0.67 | 0.6678 |
 | **phenol total** | **0.9139** | **0.9139** |
 
-Tied with LAMMPS as the tightest match of any of the five downstream engines -- once the atom types actually match, TINKER reproduces BOSS's own energy almost exactly. Not yet exercised: a molecule with real improper torsions (neither benzene nor phenol has any in this OPLS-AA parameterization), so `Boss2Tinker()`'s `imptors` section-writing code path remains untested by this methodology.
+Tied with LAMMPS as the tightest match of any of the five downstream engines -- once the atom types actually match, TINKER reproduces BOSS's own energy almost exactly. At the time this was written, the benzene/phenol geometries used here came from stale legacy reference Zmatrices (`benzen.z`/`phenol.z`) that -- like `toluen.z` above -- turned out to declare zero real improper torsions at all, so `Boss2Tinker()`'s `imptors` section-writing code path went untested here. **This claim was wrong** -- see "A second, much bigger bug: Proper/Improper misclassification, and why the old reference files hid it" below, which found real impropers on both molecules once generated fresh, and a real classification bug that had nothing to do with the reference-file question.
+
+## A second, much bigger bug: Proper/Improper misclassification, and why the old reference files hid it
+
+While testing Q (see below), a direct challenge to this document's own "benzene has zero impropers" claim -- benzene has 6 sp2 ring carbons, so it should have 6 -- led to tracing the claim back to its source and finding it was never actually representative.
+
+**The reference files were degenerate for impropers too.** `benzen.z`/`phenol.z` (BOSS's own legacy reference library, `molecules/small/`) turned out to have the exact same kind of gap already documented above for `toluen.z`'s torsions: their "Additional Dihedrals follow" section is a bare `AUTO` placeholder, not real declarations. A fresh generation (submitted by SMILES to the live production Space) confirmed BOSS genuinely tabulates 6 real `k2=10.46` improper-type Fourier coefficients for benzene's 6 ring carbons, and a real (if partial) set for phenol.
+
+**A real, much older, previously-undiscovered classification bug.** Re-running that same fresh benzene through the *local* codebase (not the Space, which runs an older, differently-behaved deployment) showed every one of those 30 declared torsions being written as `<Proper>` -- zero `<Improper>` tags, even though the correct `k2` values were still present. Traced to `BOSSReader.ucomb()`, shared identically by all 8 `BOSS2*.py` writers to decide Proper vs. Improper: it counted how many of a quadruple's 4 atoms have bonds among **any** of the 6 possible atom pairs, and called it "Proper" if the count was 3. But a genuine bonded chain (i-j-k-l: bonds at (i,j),(j,k),(k,l)) and a genuine improper star (hub bonded to 3 substituents, substituents not bonded to each other: bonds at (hub,sub1),(hub,sub2),(hub,sub3)) **both** have exactly 3 bonded pairs among their 6 possible pairs -- the count alone can't distinguish them. Confirmed directly against benzene's real bond graph: quadruple `[H806, C805, C800, C801]` is a genuine star centered on C800, and `ucomb` returned 3 for it, identical to what it returns for a real chain.
+
+This is not a regression from this session's own work: the pre-refactor `BOSS2OPENMM.py` (extracted from commit `38921b9`, well before today) was tested directly against the same fresh-benzene data and gave the identical result (0 impropers). `ucomb()` itself has not changed since the very first commit of this codebase (`884d392`). It has silently mislabeled every improper as a Proper torsion for as long as the codebase has existed, across all 8 writers.
+
+**Fix**: rewrote `ucomb()` to check specifically whether the 3 *consecutive* pairs -- (i,j), (j,k), (k,l) -- are each real bonds, rather than counting bonds among all 6 possible pairs regardless of which ones. A star quadruple's non-consecutive-adjacent pair (whichever one doesn't involve the hub, depending on where the hub falls in the quadruple's declared order) is never a real bond, so the consecutive-pair count comes out below 3, correctly reading as Improper.
+
+**Verified**: fresh benzene now gets exactly 24 Proper + 6 Improper (matching its 6 chemically-equivalent ring carbons); fresh phenol gets 6 Improper matching its 6 ring positions. All 29 existing tests (`tests/test_bossreader.py` + `tests/test_integration_converters.py`) still pass. Energy totals are essentially unchanged for both molecules -- benzene and phenol are close enough to their own planar equilibrium geometry that both the old (mislabeled-as-Proper) and new (correctly-labeled-Improper) functional forms evaluate to ~0 kcal/mol for these specific terms, which is exactly why this bug survived undetected through this whole validation exercise up to this point. It would not necessarily be energy-neutral for a genuinely non-planar molecule, since Proper and Improper conventions define the measured dihedral angle differently.
+
+**A second bug this surfaced, found and fixed while re-verifying LAMMPS with real improper data**: `eval_lammps_energy.sh`'s single-point evaluation started failing on phenol with "Did not assign all atoms correctly." Root cause: `BOSS2LAMMPS.py`'s `.lmp` writer sets the simulation box's `xlo`/`ylo`/`zlo` to the exact coordinate minimum of the molecule, which by construction places at least one atom exactly on the box's lower face -- LAMMPS's domain decomposition can silently fail to assign that atom even with `boundary f f f`. Not a `BOSS2LAMMPS.py` bug (the `.lmp` file is perfectly valid); a test-harness gotcha specific to reusing the writer's own nominal box for a real evaluation. Fixed by padding every bound by 1 Å in `eval_lammps_energy.sh` before running `lmp`.
+
+**Post-fix result, fresh benzene** (kcal/mol; BOSS total 7.9372328, bond=0.2214, angle=0.0, torsion=0.0, nonbonded=7.72):
+
+| engine | total | bond | angle | torsion(+improper) | nonbonded |
+|---|---|---|---|---|---|
+| OpenMM | 7.9149 | 0.2144 | 0.0001 | 0.0 | 7.7004 |
+| LAMMPS | 7.9372 | 0.2171 | 0.0001 | ~0.0 | 7.7200 |
+| TINKER | 7.9389 | 0.2215 | 0.0 | 0.0 | 7.7174 |
+
+**Post-fix result, fresh phenol** (kcal/mol; BOSS total -2.292973, bond=0.2106, angle=0.0404, torsion=0.0, nonbonded=-2.54):
+
+| engine | total | bond | angle | torsion(+improper) | nonbonded |
+|---|---|---|---|---|---|
+| OpenMM | -2.2847 | 0.2113 | 0.0406 | 0.0 | -2.5366 |
+| GROMACS | -2.1891 | 0.3204 | 0.0719 | 0.0 | -2.5814 |
+| LAMMPS | -2.2925 | 0.2156 | 0.0409 | ~0.0 | -2.5490 |
+| TINKER | -2.2955 | 0.2106 | 0.0404 | 0.0 | -2.5465 |
+
+All within the same tolerance already established for the toluene/anisole-excluded set. `docs/agents`/future sessions extending this methodology to Q, XPLOR, or DESMOND should use freshly-generated Zmatrices (via the live Space or `-s <SMILES>`), not the legacy `molecules/small/*.z` reference library, for any molecule where the improper-torsion code path matters -- the reference library's degenerate declarations (confirmed now for `toluen.z`, `benzen.z`, and `phenol.z`) make it systematically unable to catch bugs in that path.
