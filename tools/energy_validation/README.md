@@ -1,4 +1,4 @@
-# Energy validation: BOSS vs. OpenMM vs. GROMACS vs. NAMD
+# Energy validation: BOSS vs. OpenMM vs. GROMACS vs. NAMD vs. LAMMPS
 
 Checks that LigParGen's generated parameter files actually reproduce
 BOSS's own energy for a given molecule and geometry, across output
@@ -45,21 +45,25 @@ person who wrote this tool's own past cross-code validation work:
    ```bash
    ./build.sh /path/to/your/boss/install
    ```
-2. Build the two derived validation images (adds OpenMM via pip, and
-   GROMACS via `apt-get` -- both freely available, no license needed
-   beyond what `ligpargen:dev` already required):
+2. Build the three derived validation images (adds OpenMM via pip, GROMACS
+   via `apt-get`, and LAMMPS via `apt-get` -- all freely available, no
+   license needed beyond what `ligpargen:dev` already required). On a
+   non-amd64 host (e.g. Apple Silicon), `build.sh` passes
+   `--platform linux/amd64` for you -- `ligpargen:dev` itself is amd64-only
+   (BOSS is a 32-bit x86 binary):
    ```bash
    cd tools/energy_validation
    ./build.sh
    ```
-   This produces `ligpargen-openmm:dev` and `ligpargen-gmx:dev`.
+   This produces `ligpargen-openmm:dev`, `ligpargen-gmx:dev`, and
+   `ligpargen-lammps:dev`.
 3. (Optional) For the NAMD leg, get your own licensed NAMD install (not
    Dockerized -- see "The NAMD leg" below) and point `NAMD_DIR` at it:
    ```bash
    export NAMD_DIR=/path/to/your/namd/install   # containing namd3, psfgen
    ```
-   Leave `NAMD_DIR` unset to skip NAMD and just get the BOSS/OpenMM/GROMACS
-   three-way comparison.
+   Leave `NAMD_DIR` unset to skip NAMD and just get the
+   BOSS/OpenMM/GROMACS/LAMMPS four-way comparison.
 
 ## Running a comparison
 
@@ -71,9 +75,9 @@ person who wrote this tool's own past cross-code validation work:
 # with NAMD_DIR set, this also prints a NAMD_ENERGY/NAMD_TERMS line
 ```
 
-Prints BOSS's, OpenMM's, GROMACS's, and (if `NAMD_DIR` is set) NAMD's
-total and per-term energies (kcal/mol) for that Zmatrix's geometry. The
-resname **must be exactly 3
+Prints BOSS's, OpenMM's, GROMACS's, LAMMPS's, and (if `NAMD_DIR` is set)
+NAMD's total and per-term energies (kcal/mol) for that Zmatrix's geometry.
+The resname **must be exactly 3
 characters** -- LigParGen's PDB writer uses a fixed 3-column residue-name
 field (`%3s`); anything longer silently overflows into the coordinate
 columns and either corrupts them or makes a strict reader like OpenMM's
@@ -135,9 +139,10 @@ done
   -- the only place BOSS's own single-point energy (`NEW E`) and its
   per-term breakdown (`EBNDNE`/`EANGNE`/`EDIHNE`/`ENBNE`) are ever
   printed. Nothing else in the package prints or persists them. Also
-  writes the OpenMM XML/PDB and GROMACS itp/gro for that same geometry
-  (via `mainBOSS2OPM`/`mainBOSS2GMX`) so the other two scripts have
-  something to evaluate.
+  writes the OpenMM XML/PDB, GROMACS itp/gro, CHARMM rtf/prm, and LAMMPS
+  lmp for that same geometry (via `mainBOSS2OPM`/`mainBOSS2GMX`/
+  `mainBOSS2CHARMM`/`mainBOSS2LAMMPS`) so the other scripts have something
+  to evaluate.
 - **`eval_openmm_energy.py`** (runs in `ligpargen-openmm:dev`): loads the
   XML+PDB into a real OpenMM `System`/`Context`, assigns each `Force` its
   own force group, evaluates `nsteps=0` (no minimization), reports total
@@ -147,6 +152,11 @@ done
   "GROMACS gotchas" below), runs `gmx grompp` + `gmx mdrun -nsteps 0` +
   `gmx energy`, converts kJ/mol → kcal/mol, reports total and per-term
   energy.
+- **`eval_lammps_energy.sh`** (runs in `ligpargen-lammps:dev`): runs `lmp`
+  directly against the `.lmp` data file with free (non-periodic)
+  boundaries (templated from `lammps_sp_template.in`), a genuine `run 0`,
+  parses the `thermo_style custom` output line, reports total and
+  per-term energy.
 - **`eval_namd_energy.sh`** (runs natively, NOT in Docker -- see "The NAMD
   leg" below): builds a `.psf` from the `.rtf`/`.prm`/`.pdb` via `psfgen`
   (templated from `psfgen_template.pgn`), then runs NAMD itself with a
@@ -157,9 +167,53 @@ done
   command, in a throwaway temp directory.
 - **`vacuum_sp.mdp`**: the GROMACS run parameters for a genuine
   single-point vacuum-equivalent evaluation.
+- **`lammps_sp_template.in`**: the LAMMPS input-script template
+  `eval_lammps_energy.sh` fills in with the resid.
 - **`psfgen_template.pgn`**, **`namd_sp_template.conf`**: templates
   `eval_namd_energy.sh` fills in with the resid (`__RESID__` placeholder)
   for the psfgen and NAMD steps respectively.
+
+## The LAMMPS leg
+
+LAMMPS is Dockerized the same way GROMACS is (`Dockerfile.lammps`, adds
+Debian's `apt-get install lammps` on top of `ligpargen-openmm:dev` --
+freely available, GPL, no license needed). The installed binary is named
+`lmp` (not `lmp_serial`/`lmp_mpi`, if you're used to older LAMMPS
+packaging).
+
+`BOSS2LAMMPS.py`'s `.lmp` writer is structurally different from the other
+four writers: instead of deduplicating by parameter class (the way the
+OpenMM/GROMACS/CHARMM writers all do, giving repeated `<Proper class1=...>`-
+style entries a single shared type), every individual atom/bond/angle/
+dihedral instance gets its own unique numbered type, with BOSS's raw
+per-instance parameters written directly. This makes it the least-
+transformed of any writer here, and it shows: LAMMPS's single-point energy
+matched BOSS's own printed total to within 0.00005 kcal/mol on both
+molecules tested -- see `docs/adr/0006`.
+
+LAMMPS's built-in `dihedral_style opls` and `improper_style cvff` match
+the `.lmp` writer's coefficient layout exactly, with **no unit conversion
+or halving needed** -- unlike the OpenMM/CHARMM writers, which both
+convert kcal→kJ (OpenMM only) and halve BOSS's raw Fourier coefficients
+(`K = V_opls / 2`) to match the `1 + cos(...)` energy form those tools
+expect. LAMMPS's `opls` dihedral style already bakes the equivalent 0.5
+factor into its own formula, so it wants BOSS's raw, unhalved,
+kcal/mol-unit V-coefficients directly -- confirmed directly: BOSS's own
+raw `V2` for benzene's ring torsion is `7.250` kcal/mol, which is exactly
+what `.lmp` writes, and is consistent with OpenMM's stored
+`k2 = 15.167 kJ/mol = 7.250 * 4.184 / 2`.
+
+`lammps_sp_template.in` uses free (non-periodic) boundaries
+(`boundary f f f`) with a 100 Å cutoff for a true vacuum evaluation --
+unlike modern GROMACS (see the GROMACS gotchas above), LAMMPS actually
+supports genuinely non-periodic boundaries directly, so no enlarged-box
+workaround is needed here. `special_bonds lj/coul 0.0 0.0 0.5` matches
+OPLS-AA's 1-4 scaling convention, and LAMMPS's default pair-mixing rule
+for `lj/cut` is already geometric-mean, matching OPLS-AA's own combining
+rule -- so no `pair_modify mix` override is needed either, since every
+atom gets its own unique type (per the writer's own per-instance
+convention above) and cross-type LJ parameters are always obtained
+through mixing, never given explicitly.
 
 ## The NAMD leg
 
@@ -275,10 +329,10 @@ unevenness, confirmed directly (not assumed) more than once this session:
 ## What's not covered yet
 
 **Other output formats** (`.key`/TINKER, `.Q.prm`/Q, `.top`+`.param`/
-XPLOR, `.cms`/DESMOND, `.lmp`/LAMMPS): not energy-validated at all yet.
-The `[ dihedrals ]`-omission bug this methodology found was specific to
+XPLOR, `.cms`/DESMOND): not energy-validated at all yet. The
+`[ dihedrals ]`-omission bug this methodology found was specific to
 `BOSS2GMX.py`'s own code (confirmed via `grep` that no other writer has
 the identical broken condition) -- but that doesn't mean the others are
 correct, only that they weren't specifically checked. Each would need its
-own `eval_<format>_energy.*` script analogous to the two here, using
+own `eval_<format>_energy.*` script analogous to the ones here, using
 whatever engine reads that format natively.

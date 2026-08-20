@@ -1,0 +1,34 @@
+# Single-point (run 0, no minimization) potential energy evaluation of a
+# LigParGen-generated .lmp data file, decomposed by force type. See
+# ../README.md's "The LAMMPS leg" section.
+#
+# Free (non-periodic) boundaries + a cutoff far past the molecule's own
+# extent approximates BOSS/OpenMM/NAMD's vacuum, no-cutoff evaluation --
+# same reasoning as eval_gromacs_energy.sh's enlarged-box workaround, but
+# LAMMPS (unlike modern GROMACS) actually supports true non-periodic
+# boundaries directly, so no box enlargement trick is needed here.
+units real
+atom_style full
+boundary f f f
+
+pair_style lj/cut/coul/cut 100.0
+bond_style harmonic
+angle_style harmonic
+dihedral_style opls
+improper_style cvff
+# OPLS-AA convention: exclude 1-2/1-3 entirely, scale 1-4 by 0.5 for both
+# LJ and Coulomb -- matches the coulomb14scale/lj14scale already used by
+# LigParGen's OpenMM/GROMACS writers (see docs/adr/0006).
+special_bonds lj/coul 0.0 0.0 0.5
+
+read_data __RESID__.lmp
+
+# LAMMPS's default (geometric-mean) pair mixing already matches OPLS-AA's
+# own combining rule -- no explicit pair_modify mix needed, since every
+# atom in a LigParGen .lmp file gets its own unique type (see
+# BOSS2LAMMPS.py), so only diagonal (self) Pair Coeffs are ever given and
+# every cross term relies on this mixing rule.
+
+thermo_style custom step ebond eangle edihed eimp evdwl ecoul elong etail epair pe
+thermo_modify flush yes
+run 0

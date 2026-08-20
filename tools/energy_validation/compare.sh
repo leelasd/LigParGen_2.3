@@ -33,7 +33,7 @@ if [ ${#resname} -ne 3 ]; then
     exit 1
 fi
 
-for img in ligpargen-openmm:dev ligpargen-gmx:dev; do
+for img in ligpargen-openmm:dev ligpargen-gmx:dev ligpargen-lammps:dev; do
     if ! docker image inspect "$img" >/dev/null 2>&1; then
         echo "ERROR: $img not found. Run ./build.sh first." >&2
         exit 1
@@ -79,6 +79,17 @@ if grep -q GROMACS_ENERGY "$gmx_log"; then
 else
     echo "GROMACS evaluation failed:"
     cat "$gmx_log"
+fi
+
+lammps_log="$WORKDIR/lammps.log"
+docker run --rm -v "$(pwd)":/tools -v "$WORKDIR":/tmp \
+    --entrypoint bash ligpargen-lammps:dev -c "cd /tmp && /tools/eval_lammps_energy.sh $resname" \
+    > "$lammps_log" 2>&1 || true
+if grep -q LAMMPS_ENERGY "$lammps_log"; then
+    grep -E 'LAMMPS_ENERGY|LAMMPS_TERMS' "$lammps_log"
+else
+    echo "LAMMPS evaluation failed:"
+    cat "$lammps_log"
 fi
 
 # NAMD is optional and NOT Dockerized -- it's a licensed, proprietary

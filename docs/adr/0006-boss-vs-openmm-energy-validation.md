@@ -1,4 +1,4 @@
-# BOSS vs. OpenMM/GROMACS/NAMD single-point energy validation, and a documented residual
+# BOSS vs. OpenMM/GROMACS/NAMD/LAMMPS single-point energy validation, and a documented residual
 
 The reusable methodology, scripts, Dockerfiles, and full gotcha list for reproducing or extending this validation live in [`tools/energy_validation/`](../../tools/energy_validation/README.md) -- read that first if you're running this again rather than just reading about what it already found.
 
@@ -77,3 +77,31 @@ NAMD's total is within 0.0005 kcal/mol of BOSS's -- closer than OpenMM's own 0.0
 Same pattern: NAMD's total sits between BOSS's and OpenMM's, well within the same tolerance both already established as a match. No new discrepancy found -- NAMD confirms the CHARMM/NAMD writer path is correct for both molecules tested, using OPLS-AA's geometric-mean sigma combining rule (`vdwGeometricSigma yes` in the NAMD config -- without it NAMD silently uses CHARMM's arithmetic-mean rule instead, which would have been a real, silent, wrong-answer trap).
 
 Not yet run through NAMD: the toluene/anisole nonbonded residual documented above, or the newly-noted phenol GROMACS gap -- both remain OpenMM/GROMACS-side observations only. A NAMD data point on toluene specifically (does NAMD show the same nonbonded residual, a different one, or none?) would be informative but wasn't requested this round.
+
+## Extending to LAMMPS: the tightest match of any engine
+
+Extended the same methodology to LAMMPS (freely available via Debian's own apt repo, GPL -- no license needed, same as GROMACS) via `BOSS2LAMMPS.py`'s `.lmp` data file. Unlike the other four writers, `BOSS2LAMMPS.py` gives every atom/bond/angle/dihedral instance its own unique numbered type rather than deduplicating by class -- the least-transformed representation of BOSS's own raw per-instance parameters of any writer here, which likely explains why it reproduces BOSS most faithfully of all five engines tested (see results below). LAMMPS's built-in `dihedral_style opls` and `improper_style cvff` match the `.lmp` writer's own coefficient layout exactly -- no unit conversion or halving needed on the LAMMPS side (BOSS's raw Fourier coefficients are already in kcal/mol and already carry the form `opls` expects, unlike the OpenMM/CHARMM paths which both convert units and halve V-coefficients to `K = V/2` for the `1+cos` energy form -- confirmed directly: BOSS's raw V2 for benzene's ring torsion is 7.250 kcal/mol, matching `.lmp`'s dihedral coefficient exactly, and consistent with OpenMM's stored `k2=15.167 kJ/mol` = `7.250 kcal/mol * 4.184 / 2`).
+
+Free (non-periodic) boundaries with a 100 Å cutoff give LAMMPS a true vacuum evaluation directly -- unlike modern GROMACS, LAMMPS doesn't reject `boundary f f f`, so no enlarged-box workaround is needed here (see `tools/energy_validation/README.md`'s "The LAMMPS leg" section).
+
+**Result, benzene** (kcal/mol):
+
+| | BOSS | OpenMM | GROMACS | NAMD | LAMMPS |
+|---|---|---|---|---|---|
+| bond | 0.221 | 0.2219 | 0.2838 | 0.2219 | 0.2209 |
+| angle | 0.0 | 0.0001 | 0.0110 | 0.0001 | ~0.0 |
+| torsion | 0.0 | 0.0 | 0.0 | 0.0 | ~0.0 |
+| nonbonded | 6.46 | 6.4368 | 6.4298 | 6.4591 | 6.4597 |
+| **total** | **6.6806** | 6.6588 | 6.7246 | 6.6811 | **6.6806** |
+
+**Result, phenol** (kcal/mol):
+
+| | BOSS | OpenMM | GROMACS | NAMD | LAMMPS |
+|---|---|---|---|---|---|
+| bond | 0.2192 | 0.2202 | 0.2722 | 0.2202 | 0.2192 |
+| angle | 0.027 | 0.0256 | 0.0467 | 0.0256 | 0.0270 |
+| torsion | 0.0 | 0.0 | 0.0 | 0.0 | ~0.0 |
+| nonbonded | 0.67 | 0.6697 | 0.7257 | 0.669 | 0.6677 |
+| **total** | **0.9139** | 0.9155 | 1.0447 | 0.9148 | **0.9139** |
+
+LAMMPS's total matches BOSS's printed value to within 0.00005 kcal/mol on both molecules -- the tightest of any of the four downstream engines, including per-term agreement to BOSS's own print precision. No new discrepancy found; this confirms `BOSS2LAMMPS.py`'s writer (and its `opls`/`cvff` coefficient conventions) is correct for both molecules tested.

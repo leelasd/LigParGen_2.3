@@ -29,6 +29,7 @@ from LigParGen.BOSSReader import BOSSReader
 from LigParGen.BOSS2OPENMM import mainBOSS2OPM
 from LigParGen.BOSS2GMX import mainBOSS2GMX
 from LigParGen.BOSS2CHARMM import mainBOSS2CHARMM
+from LigParGen.BOSS2LAMMPS import mainBOSS2LAMMPS
 
 resid = sys.argv[1]
 zmat_src = sys.argv[2]
@@ -67,13 +68,14 @@ with open('/tmp/out') as f:
 print('BOSS_ENERGY_KCAL_PER_MOL %s' % boss_energy)
 print('BOSS_TERMS bond=%s angle=%s torsion=%s nonbonded=%s' % (boss_ebnd, boss_eang, boss_edih, boss_enb))
 
-# Also write the OpenMM XML+PDB, GROMACS itp+gro, and CHARMM/NAMD rtf+prm
-# for this same BOSS-computed geometry, so eval_openmm_energy.py /
-# eval_gromacs_energy.sh / eval_namd_energy.sh can evaluate them. Harmless
-# (and cheap) to do even if you only wanted the BOSS numbers, or only one
-# of the three formats.
+# Also write the OpenMM XML+PDB, GROMACS itp+gro, CHARMM/NAMD rtf+prm, and
+# LAMMPS lmp for this same BOSS-computed geometry, so eval_openmm_energy.py
+# / eval_gromacs_energy.sh / eval_namd_energy.sh / eval_lammps_energy.sh
+# can evaluate them. Harmless (and cheap) to do even if you only wanted
+# the BOSS numbers, or only some of the formats.
 pickle.dump(mol, open('%s.pkl' % resid, 'wb'))
 mainBOSS2OPM(resid, False)
 mainBOSS2GMX(resid, False)
 mainBOSS2CHARMM(resid)
-print('WROTE_FILES %s.xml %s.pdb %s.itp %s.gro %s.rtf %s.prm' % (resid, resid, resid, resid, resid, resid))
+mainBOSS2LAMMPS(resid)
+print('WROTE_FILES %s.xml %s.pdb %s.itp %s.gro %s.rtf %s.prm %s.lmp' % (resid, resid, resid, resid, resid, resid, resid))
