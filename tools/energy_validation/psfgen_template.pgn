@@ -1,0 +1,13 @@
+package require psfgen
+resetpsf
+topology __RESID__.rtf
+segment __RESID__ {
+    first none
+    last none
+    pdb __RESID__.pdb
+}
+coordpdb __RESID__.pdb __RESID__
+guesscoord
+writepsf __RESID__.psf
+writepdb __RESID___psfgen.pdb
+exit

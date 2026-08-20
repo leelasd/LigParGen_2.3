@@ -1,4 +1,4 @@
-# Energy validation: BOSS vs. OpenMM vs. GROMACS
+# Energy validation: BOSS vs. OpenMM vs. GROMACS vs. NAMD
 
 Checks that LigParGen's generated parameter files actually reproduce
 BOSS's own energy for a given molecule and geometry, across output
@@ -53,6 +53,13 @@ person who wrote this tool's own past cross-code validation work:
    ./build.sh
    ```
    This produces `ligpargen-openmm:dev` and `ligpargen-gmx:dev`.
+3. (Optional) For the NAMD leg, get your own licensed NAMD install (not
+   Dockerized -- see "The NAMD leg" below) and point `NAMD_DIR` at it:
+   ```bash
+   export NAMD_DIR=/path/to/your/namd/install   # containing namd3, psfgen
+   ```
+   Leave `NAMD_DIR` unset to skip NAMD and just get the BOSS/OpenMM/GROMACS
+   three-way comparison.
 
 ## Running a comparison
 
@@ -61,10 +68,12 @@ person who wrote this tool's own past cross-code validation work:
 
 # e.g.
 ./compare.sh PHN ~/Codes/WLJ/boss/molecules/small/phenol.z 0
+# with NAMD_DIR set, this also prints a NAMD_ENERGY/NAMD_TERMS line
 ```
 
-Prints BOSS's, OpenMM's, and GROMACS's total and per-term energies
-(kcal/mol) for that Zmatrix's geometry. The resname **must be exactly 3
+Prints BOSS's, OpenMM's, GROMACS's, and (if `NAMD_DIR` is set) NAMD's
+total and per-term energies (kcal/mol) for that Zmatrix's geometry. The
+resname **must be exactly 3
 characters** -- LigParGen's PDB writer uses a fixed 3-column residue-name
 field (`%3s`); anything longer silently overflows into the coordinate
 columns and either corrupts them or makes a strict reader like OpenMM's
@@ -138,10 +147,59 @@ done
   "GROMACS gotchas" below), runs `gmx grompp` + `gmx mdrun -nsteps 0` +
   `gmx energy`, converts kJ/mol → kcal/mol, reports total and per-term
   energy.
-- **`compare.sh`**: orchestrates all three for one molecule in one
+- **`eval_namd_energy.sh`** (runs natively, NOT in Docker -- see "The NAMD
+  leg" below): builds a `.psf` from the `.rtf`/`.prm`/`.pdb` via `psfgen`
+  (templated from `psfgen_template.pgn`), then runs NAMD itself with a
+  genuine `run 0` config (templated from `namd_sp_template.conf`), parses
+  the `ENERGY:` line, reports total and per-term energy. Only runs when
+  `NAMD_DIR` is set.
+- **`compare.sh`**: orchestrates all of the above for one molecule in one
   command, in a throwaway temp directory.
 - **`vacuum_sp.mdp`**: the GROMACS run parameters for a genuine
   single-point vacuum-equivalent evaluation.
+- **`psfgen_template.pgn`**, **`namd_sp_template.conf`**: templates
+  `eval_namd_energy.sh` fills in with the resid (`__RESID__` placeholder)
+  for the psfgen and NAMD steps respectively.
+
+## The NAMD leg
+
+Unlike OpenMM/GROMACS, NAMD is **not Dockerized** -- like BOSS itself
+(`docs/adr/0001`), it's a licensed, proprietary binary (from UIUC, not
+available via any package manager) that must be supplied locally at
+runtime, never committed to this repo or baked into any image. Point
+`NAMD_DIR` at your own install directory (containing `namd3` and
+`psfgen`) to include this leg; every script here treats its absence as
+"skip NAMD," not an error.
+
+NAMD reads CHARMM-format topology/parameters -- `LigParGen`'s own
+`BOSS2CHARMM.py` writer produces the `.rtf`/`.prm` pair, and `psfgen`
+(NAMD's own topology tool, ships alongside `namd3`) turns the `.rtf` plus
+LigParGen's `.pdb` into a `.psf`. The NAMD config
+(`namd_sp_template.conf`) sets `vdwGeometricSigma yes` -- OPLS-AA uses a
+geometric-mean combining rule for sigma (as well as epsilon, which NAMD
+always combines geometrically), and without this flag NAMD silently falls
+back to CHARMM's arithmetic-mean sigma rule, giving the wrong LJ energy
+for an OPLS-AA force field. This matches the setting in a real, historical
+2017 NAMD-vs-OpenMM comparison config from this codebase's own author.
+`run 0` (not `minimize`) is what makes this a genuine single point --
+see "Why single-point" above for why that distinction is load-bearing, not
+cosmetic (a `minimize 1000` NAMD config was in fact what that 2017
+comparison used, and had to be replaced with `run 0` to get a valid
+comparison here).
+
+**macOS Gatekeeper**: an unsigned, downloaded NAMD binary (`namd3`,
+`psfgen`) will be quarantined the first time you run each one --
+"Apple could not verify... is free of malware." Run the binary once (it
+will hang or get killed), then go to System Settings > Privacy & Security
+and click "Allow Anyway" next to the message about that binary. This is a
+security-relevant setting change, so do it yourself rather than having an
+agent run `xattr -d com.apple.quarantine` for you -- needs doing once per
+binary, per machine.
+
+**Validated**: benzene and phenol (both already in the "8 of 10 match
+closely" set from `docs/adr/0006`) were run through this NAMD leg and
+matched BOSS/OpenMM/GROMACS to within the same tolerance as the other two
+engines -- see `docs/adr/0006`'s NAMD section for the numbers.
 
 ## Known gotchas (each one real, each one hit while building this)
 
@@ -215,16 +273,6 @@ unevenness, confirmed directly (not assumed) more than once this session:
   `find_boss_sections()` now recognizes both.
 
 ## What's not covered yet
-
-**NAMD**: not run. Like BOSS itself, NAMD requires a separately licensed
-binary from UIUC (not available via any package manager, unlike GROMACS)
--- someone would need to supply one, the same way BOSS is supplied
-locally per `docs/adr/0001`. If you have a licensed NAMD install, the
-methodology here should extend directly: NAMD reads CHARMM-format
-files (`LigParGen`'s own `.rtf`/`.prm` writer, `BOSS2CHARMM.py`), and its
-own `run 0` (not a minimization step -- see the ParmEd#907 discussion
-above for why that distinction matters) gives a genuine single-point
-energy comparable to the others.
 
 **Other output formats** (`.key`/TINKER, `.Q.prm`/Q, `.top`+`.param`/
 XPLOR, `.cms`/DESMOND, `.lmp`/LAMMPS): not energy-validated at all yet.

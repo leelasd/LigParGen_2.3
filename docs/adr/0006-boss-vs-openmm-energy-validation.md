@@ -1,4 +1,4 @@
-# BOSS vs. OpenMM/GROMACS single-point energy validation, and a documented residual
+# BOSS vs. OpenMM/GROMACS/NAMD single-point energy validation, and a documented residual
 
 The reusable methodology, scripts, Dockerfiles, and full gotcha list for reproducing or extending this validation live in [`tools/energy_validation/`](../../tools/energy_validation/README.md) -- read that first if you're running this again rather than just reading about what it already found.
 
@@ -43,3 +43,37 @@ Extended the same methodology to `BOSS2GMX.py`'s `.itp`/`.gro` output (GROMACS i
 | **total** | **3.9107** | 4.0438 | **3.9673** |
 
 GROMACS's total actually lands closer to BOSS than OpenMM's does. But its bond term specifically shows a real ~0.125 kcal/mol gap, much larger than OpenMM's near-exact bond match. Per-bond force constants and equilibrium lengths were verified byte-identical between the `.xml` and the (fixed) `.itp` -- this isn't a data transcription bug. The most plausible explanation, not fully proven: the `.gro` coordinate format only stores 3 decimal places in *nanometers* (0.01 Å resolution), a full order of magnitude coarser than the `.pdb` format's 3 decimals in *Ångströms* (0.001 Å) that the OpenMM path reads -- and bond terms, having by far the largest force constants of any term, are the most sensitive to exactly this kind of positional truncation. Documented as a known, GROMACS-specific, format-precision-driven residual rather than a code bug -- see `tools/energy_validation/README.md`'s gotcha list for the full reasoning.
+
+Note: re-running phenol through the same GROMACS path while building the NAMD leg below turned up a larger, multi-term gap than the coordinate-precision explanation alone predicts (bond 0.272 vs. BOSS's 0.219, angle 0.047 vs. 0.027, nonbonded 0.726 vs. 0.67 -- total 1.045 vs. BOSS's 0.914, ~14% high). That's bigger and broader than toluene's bond-only ~0.125 gap, so `.gro` precision may not be the whole GROMACS story. Not chased further here -- flagged for whoever next touches the GROMACS leg.
+
+## Extending to NAMD: a genuine third-engine confirmation
+
+Extended the same methodology to NAMD once a licensed NAMD 3.0.3 binary and NAMD's own `psfgen` topology tool became available locally (see `tools/energy_validation/README.md`'s "The NAMD leg" section for the full setup -- NAMD is not Dockerized, supplied locally exactly like BOSS per `docs/adr/0001`). NAMD reads CHARMM-format files, so this exercises a completely different LigParGen writer (`BOSS2CHARMM.py`, `.rtf`/`.prm`) than the OpenMM/GROMACS legs above, via a completely different tool (`psfgen` to build a `.psf`, then NAMD's own force evaluation) -- a genuinely independent cross-check, not a re-run of the same code path.
+
+This directly closes the loop on [ParmEd#907](https://github.com/ParmEd/ParmEd/issues/907), the historical issue that grounded this whole methodology's single-point-only rule: that issue's own root cause was comparing a NAMD *minimization* endpoint against an OpenMM single point. The user's own 2017 NAMD-vs-OpenMM test config (`min.conf`, provided this session) still used `minimize 1000`, not a true single point -- consistent with that being exactly the trap the ParmEd issue was about. The new config used here (`namd_sp_template.conf`) uses a genuine `run 0`, closing that gap.
+
+**Result, benzene** (kcal/mol; same molecule/geometry as the OpenMM/GROMACS numbers used throughout this doc):
+
+| | BOSS | OpenMM | NAMD |
+|---|---|---|---|
+| bond | 0.221 | 0.2219 | 0.2219 |
+| angle | 0.0 | 0.0001 | 0.0001 |
+| torsion | 0.0 | 0.0 | 0.0 |
+| nonbonded | 6.46 | 6.4368 | 6.4591 |
+| **total** | **6.6806** | 6.6588 | **6.6811** |
+
+NAMD's total is within 0.0005 kcal/mol of BOSS's -- closer than OpenMM's own 0.022 kcal/mol gap, and its nonbonded term (6.4591) also lands nearer BOSS's printed 6.46 than OpenMM's 6.4368 does.
+
+**Result, phenol** (has a real substituent -- OH -- unlike benzene, so exercises the CHARMM writer's `IMPROPER`/typed-atom handling on a less trivial case):
+
+| | BOSS | OpenMM | NAMD |
+|---|---|---|---|
+| bond | 0.2192 | 0.2202 | 0.2202 |
+| angle | 0.027 | 0.0256 | 0.0256 |
+| torsion | 0.0 | 0.0 | 0.0 |
+| nonbonded | 0.67 | 0.6697 | 0.669 |
+| **total** | **0.9139** | 0.9155 | **0.9148** |
+
+Same pattern: NAMD's total sits between BOSS's and OpenMM's, well within the same tolerance both already established as a match. No new discrepancy found -- NAMD confirms the CHARMM/NAMD writer path is correct for both molecules tested, using OPLS-AA's geometric-mean sigma combining rule (`vdwGeometricSigma yes` in the NAMD config -- without it NAMD silently uses CHARMM's arithmetic-mean rule instead, which would have been a real, silent, wrong-answer trap).
+
+Not yet run through NAMD: the toluene/anisole nonbonded residual documented above, or the newly-noted phenol GROMACS gap -- both remain OpenMM/GROMACS-side observations only. A NAMD data point on toluene specifically (does NAMD show the same nonbonded residual, a different one, or none?) would be informative but wasn't requested this round.

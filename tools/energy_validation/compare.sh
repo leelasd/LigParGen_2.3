@@ -21,6 +21,7 @@
 # reference files" section for the exact curl commands.
 set -euo pipefail
 cd "$(dirname "$0")"
+SCRIPT_DIR="$(pwd)"
 
 resname="$1"
 zmat="$2"
@@ -78,4 +79,20 @@ if grep -q GROMACS_ENERGY "$gmx_log"; then
 else
     echo "GROMACS evaluation failed:"
     cat "$gmx_log"
+fi
+
+# NAMD is optional and NOT Dockerized -- it's a licensed, proprietary
+# binary supplied locally at runtime, same constraint as BOSS itself (see
+# docs/adr/0001). Set NAMD_DIR to your own NAMD install directory
+# (containing namd3, psfgen) to include this leg; skipped otherwise.
+if [ -n "${NAMD_DIR:-}" ]; then
+    namd_log="$WORKDIR/namd.log"
+    ( cd "$WORKDIR" && NAMD_DIR="$NAMD_DIR" "$SCRIPT_DIR/eval_namd_energy.sh" "$resname" ) \
+        > "$namd_log" 2>&1 || true
+    if grep -q NAMD_ENERGY "$namd_log"; then
+        grep -E 'NAMD_ENERGY|NAMD_TERMS' "$namd_log"
+    else
+        echo "NAMD evaluation failed:"
+        cat "$namd_log"
+    fi
 fi
