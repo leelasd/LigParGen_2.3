@@ -378,6 +378,35 @@ BOSS/OpenMM/GROMACS/LAMMPS/TINKER to the same tolerance as the other
 engines once all of the above were fixed. See `docs/adr/0006`'s Q
 section for the numbers.
 
+**Known limitations, not yet fixed** (surfaced by code review of the fix
+commit, not exercised by benzene/phenol -- documented here rather than
+addressed now):
+
+- `Boss2CharmmPRM()`'s `[atom_types]` dedup keys on `elem +
+  <solute type id>[-3:]` (the same truncated name `boss_common.py`
+  already builds). Two atoms whose full solute type ids happen to share
+  their last 3 digits (e.g. `800` and `1800`) collide onto the same key;
+  the dedup then silently keeps the first atom's LJ params and drops the
+  second's, rather than the loud "Duplicate name?" rejection Q gave
+  before this fix (which is how the original duplicate-name bug was
+  found in the first place). Bounded by LigParGen's 200-atom cap and
+  BOSS's own solute-id numbering (never reproduced), but a real
+  silent-wrong-answer risk for a large enough molecule.
+- `retDihedImp()` now writes only the improper's `V2` Fourier term
+  (matching Q's own hardcoded `n=2` periodic-improper formula -- see
+  above). If BOSS ever assigns a molecule a nonzero `V1`/`V3`/`V4`
+  improper coefficient with `V2==0`, this silently writes a zero force
+  constant instead of surfacing the mismatch. BOSS's own impropers only
+  ever populate `V2` for every case checked so far (benzene, phenol),
+  but that's an observed pattern, not a proven invariant.
+- `eval_q_energy.sh`'s energy-summary regexes assume a fixed field
+  order/count for Q's `solute`/`SUM` lines and don't check the match
+  succeeded before dereferencing it -- a different Q6 build/version
+  reordering those columns would either crash with an unhelpful
+  traceback instead of the script's own "Q evaluation failed" message,
+  or (worse) silently mislabel terms if the field count still happened
+  to match. Validation tooling only, not shipped library code.
+
 ## Known gotchas (each one real, each one hit while building this)
 
 **GROMACS, general:**
