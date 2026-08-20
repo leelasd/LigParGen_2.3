@@ -345,7 +345,7 @@ def Boss2CharmmTorsion(bnd_df, num2opls, zmat_idx_map, molecule_data, num2typ2sy
 
 
 
-def create_xyz_file(residue_name,mol):
+def create_xyz_file(residue_name,mol,types):
     boss_xyz = mol.MolData['XYZ']
     # convert .pdb to Tinker style .xyz file
     conv = ob.OBConversion()
@@ -368,9 +368,17 @@ def create_xyz_file(residue_name,mol):
 
         xyz_dict[atom_number] = [element, atom_type, num_bonds]
 
-        # change atom type
-        new_atom_type_str = ('     ' + str(799+atom_number))[-4:]
-#        xyz_data[line_counter] = line[:49] + new_atom_type_str + line[53:]
+        # The .key file's atom/vdw/bond/angle/torsion/charge records all
+        # reference atoms by their raw OPLS type number (types[i][1], e.g.
+        # "opls_145") -- the .xyz file's own per-atom type column must use
+        # the SAME numbers for TINKER to match parameters to atoms. This
+        # used to write an arbitrary per-atom index (799+atom_number) that
+        # could never match anything declared in the .key file, making
+        # every generated TINKER file unusable: TINKER's own `analyze`
+        # reports every atom as an "Undefined Atom Type" and refuses to
+        # compute an energy at all (confirmed directly).
+        opls_type_num = int(types[atom_number - 1][1].strip('_opls'))
+        new_atom_type_str = ('     ' + str(opls_type_num))[-4:]
         xyz_data[line_counter] = line[:12] + '%11.6f %11.6f %11.6f  '%(row.X,row.Y,row.Z) + new_atom_type_str + line[53:]
         line_counter += 1
     xyz_data[0] = '%6d %s LigParGen generated OPLS-AA/CM1A Parameters\n'%(num_atoms,residue_name)
@@ -389,7 +397,8 @@ def mainBOSS2TINKER(resid, clu=False):
     #     pdb_file = '/tmp/clu.pdb'
     # else:
     #     pdb_file = '/tmp/plt.pdb'
-    xyz_dict = create_xyz_file(resid,mol)
+    types, Qs, num2opls, zmat_idx_map, num2typ2symb, num2pqrtype = bossData(mol)
+    xyz_dict = create_xyz_file(resid,mol,types)
     Boss2Tinker(resid, mol, xyz_dict)
     return None
 

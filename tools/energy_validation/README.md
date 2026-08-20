@@ -1,4 +1,4 @@
-# Energy validation: BOSS vs. OpenMM vs. GROMACS vs. NAMD vs. LAMMPS
+# Energy validation: BOSS vs. OpenMM vs. GROMACS vs. NAMD vs. LAMMPS vs. TINKER
 
 Checks that LigParGen's generated parameter files actually reproduce
 BOSS's own energy for a given molecule and geometry, across output
@@ -45,25 +45,27 @@ person who wrote this tool's own past cross-code validation work:
    ```bash
    ./build.sh /path/to/your/boss/install
    ```
-2. Build the three derived validation images (adds OpenMM via pip, GROMACS
-   via `apt-get`, and LAMMPS via `apt-get` -- all freely available, no
-   license needed beyond what `ligpargen:dev` already required). On a
-   non-amd64 host (e.g. Apple Silicon), `build.sh` passes
-   `--platform linux/amd64` for you -- `ligpargen:dev` itself is amd64-only
-   (BOSS is a 32-bit x86 binary):
+2. Build the four derived validation images (adds OpenMM via pip, GROMACS
+   via `apt-get`, LAMMPS via `apt-get`, and TINKER built from source via
+   `git clone` + `cmake` -- all freely available, no license needed
+   beyond what `ligpargen:dev` already required). On a non-amd64 host
+   (e.g. Apple Silicon), `build.sh` passes `--platform linux/amd64` for
+   you -- `ligpargen:dev` itself is amd64-only (BOSS is a 32-bit x86
+   binary). The TINKER image takes a few minutes (compiling ~300 Fortran
+   files from source -- see "The TINKER leg" below):
    ```bash
    cd tools/energy_validation
    ./build.sh
    ```
-   This produces `ligpargen-openmm:dev`, `ligpargen-gmx:dev`, and
-   `ligpargen-lammps:dev`.
+   This produces `ligpargen-openmm:dev`, `ligpargen-gmx:dev`,
+   `ligpargen-lammps:dev`, and `ligpargen-tinker:dev`.
 3. (Optional) For the NAMD leg, get your own licensed NAMD install (not
    Dockerized -- see "The NAMD leg" below) and point `NAMD_DIR` at it:
    ```bash
    export NAMD_DIR=/path/to/your/namd/install   # containing namd3, psfgen
    ```
    Leave `NAMD_DIR` unset to skip NAMD and just get the
-   BOSS/OpenMM/GROMACS/LAMMPS four-way comparison.
+   BOSS/OpenMM/GROMACS/LAMMPS/TINKER five-way comparison.
 
 ## Running a comparison
 
@@ -75,9 +77,9 @@ person who wrote this tool's own past cross-code validation work:
 # with NAMD_DIR set, this also prints a NAMD_ENERGY/NAMD_TERMS line
 ```
 
-Prints BOSS's, OpenMM's, GROMACS's, LAMMPS's, and (if `NAMD_DIR` is set)
-NAMD's total and per-term energies (kcal/mol) for that Zmatrix's geometry.
-The resname **must be exactly 3
+Prints BOSS's, OpenMM's, GROMACS's, LAMMPS's, TINKER's, and (if `NAMD_DIR`
+is set) NAMD's total and per-term energies (kcal/mol) for that Zmatrix's
+geometry. The resname **must be exactly 3
 characters** -- LigParGen's PDB writer uses a fixed 3-column residue-name
 field (`%3s`); anything longer silently overflows into the coordinate
 columns and either corrupts them or makes a strict reader like OpenMM's
@@ -139,10 +141,10 @@ done
   -- the only place BOSS's own single-point energy (`NEW E`) and its
   per-term breakdown (`EBNDNE`/`EANGNE`/`EDIHNE`/`ENBNE`) are ever
   printed. Nothing else in the package prints or persists them. Also
-  writes the OpenMM XML/PDB, GROMACS itp/gro, CHARMM rtf/prm, and LAMMPS
-  lmp for that same geometry (via `mainBOSS2OPM`/`mainBOSS2GMX`/
-  `mainBOSS2CHARMM`/`mainBOSS2LAMMPS`) so the other scripts have something
-  to evaluate.
+  writes the OpenMM XML/PDB, GROMACS itp/gro, CHARMM rtf/prm, LAMMPS lmp,
+  and TINKER new.xyz/key for that same geometry (via `mainBOSS2OPM`/
+  `mainBOSS2GMX`/`mainBOSS2CHARMM`/`mainBOSS2LAMMPS`/`mainBOSS2TINKER`) so
+  the other scripts have something to evaluate.
 - **`eval_openmm_energy.py`** (runs in `ligpargen-openmm:dev`): loads the
   XML+PDB into a real OpenMM `System`/`Context`, assigns each `Force` its
   own force group, evaluates `nsteps=0` (no minimization), reports total
@@ -157,6 +159,12 @@ done
   boundaries (templated from `lammps_sp_template.in`), a genuine `run 0`,
   parses the `thermo_style custom` output line, reports total and
   per-term energy.
+- **`eval_tinker_energy.sh`** (runs in `ligpargen-tinker:dev`): copies the
+  `.key` file under the `.new.xyz`'s own basename (TINKER auto-associates
+  a keyfile by matching filename), runs TINKER's own `analyze` program
+  (a pure single-point evaluator -- no simulation, no minimization step
+  even exists to accidentally use), parses its `Energy Component
+  Breakdown` block, reports total and per-term energy.
 - **`eval_namd_energy.sh`** (runs natively, NOT in Docker -- see "The NAMD
   leg" below): builds a `.psf` from the `.rtf`/`.prm`/`.pdb` via `psfgen`
   (templated from `psfgen_template.pgn`), then runs NAMD itself with a
@@ -214,6 +222,48 @@ rule -- so no `pair_modify mix` override is needed either, since every
 atom gets its own unique type (per the writer's own per-instance
 convention above) and cross-type LJ parameters are always obtained
 through mixing, never given explicitly.
+
+## The TINKER leg
+
+TINKER is freely available (BSD-style academic license) but ships in
+neither Debian's apt repo nor Homebrew, so `Dockerfile.tinker` builds it
+from source: clones `TinkerTools/tinker` from GitHub and compiles just the
+`analyze` target (TINKER's own pure single-point energy-evaluation
+program -- no simulation, no minimization even exists in it to
+accidentally use, so there's no "compare a trajectory endpoint" trap here
+the way there was for NAMD). Two real build gotchas, both patched around
+in the Dockerfile rather than waited on:
+
+- TinkerTools' own `cmake/CMakeLists.txt` (an alternative to their
+  officially-supported classic Makefile build) has an incomplete source
+  file list -- `uatom.f` defines a Fortran module several other files
+  `use`, but isn't in the curated `_FILES` list, so the build fails with
+  `Cannot open module file uatom.mod` on the first file that needs it.
+  Patched with a `sed` that adds it back in before configuring.
+- The Fortran module (`.mod`) dependency graph isn't fully expressed as
+  CMake target dependencies, so a parallel build (`-jN`, N>1) can try to
+  compile a file before the module it needs exists yet, and fails the
+  same way. Built with `-j1` (serial) instead -- slower (a few minutes)
+  but doesn't hit the race.
+
+**A real bug found here, not just a residual**: `BOSS2TINKER.py`'s
+`.xyz`-file atom-type numbering didn't match its own `.key` file's
+atom-type declarations at all (a placeholder `799 + atom_index` value
+where it needed the real OPLS type number) -- this made every TINKER
+output LigParGen has ever generated completely non-functional, confirmed
+directly by running the freshly-built `analyze` against the (then-broken)
+output and getting "Undefined Atom Type" for every atom. Fixed; see
+`docs/adr/0006` for the full story and the post-fix numbers, which now
+match BOSS as tightly as LAMMPS does.
+
+`eval_tinker_energy.sh` copies the `.key` file under the `.new.xyz`'s own
+basename before running `analyze` -- TINKER auto-associates a keyfile
+with a coordinate file purely by matching filename (`<base>.key` next to
+`<base>.xyz`), it isn't a `-k`-style command-line flag the way some other
+TINKER-family tools use. `analyze`'s interactive "Enter Parameter File
+Name" prompt is answered with a blank line (`echo ''`) -- correct, not a
+workaround, since the `.key` file already carries every parameter
+LigParGen generated with no external `oplsaa.prm` reference to point at.
 
 ## The NAMD leg
 
@@ -328,11 +378,15 @@ unevenness, confirmed directly (not assumed) more than once this session:
 
 ## What's not covered yet
 
-**Other output formats** (`.key`/TINKER, `.Q.prm`/Q, `.top`+`.param`/
-XPLOR, `.cms`/DESMOND): not energy-validated at all yet. The
-`[ dihedrals ]`-omission bug this methodology found was specific to
-`BOSS2GMX.py`'s own code (confirmed via `grep` that no other writer has
-the identical broken condition) -- but that doesn't mean the others are
-correct, only that they weren't specifically checked. Each would need its
-own `eval_<format>_energy.*` script analogous to the ones here, using
-whatever engine reads that format natively.
+**Other output formats** (`.Q.prm`/Q, `.top`+`.param`/XPLOR, `.cms`/
+DESMOND): not energy-validated at all yet. Two real bugs this methodology
+found so far (GROMACS's silently-omitted `[ dihedrals ]`, TINKER's
+mismatched atom-type numbering) were each specific to their own writer's
+code (confirmed via `grep`/direct inspection that no other writer has the
+identical broken pattern) -- but that doesn't mean the remaining three are
+correct, only that they weren't specifically checked yet. Each would need
+its own `eval_<format>_energy.*` script analogous to the ones here, using
+whatever engine reads that format natively -- and, per the pattern
+established by NAMD/TINKER/LAMMPS/GROMACS above, would need that engine's
+own licensing/availability checked before assuming it's as easy to add as
+the free-and-open ones were.

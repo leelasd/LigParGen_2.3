@@ -33,7 +33,7 @@ if [ ${#resname} -ne 3 ]; then
     exit 1
 fi
 
-for img in ligpargen-openmm:dev ligpargen-gmx:dev ligpargen-lammps:dev; do
+for img in ligpargen-openmm:dev ligpargen-gmx:dev ligpargen-lammps:dev ligpargen-tinker:dev; do
     if ! docker image inspect "$img" >/dev/null 2>&1; then
         echo "ERROR: $img not found. Run ./build.sh first." >&2
         exit 1
@@ -90,6 +90,17 @@ if grep -q LAMMPS_ENERGY "$lammps_log"; then
 else
     echo "LAMMPS evaluation failed:"
     cat "$lammps_log"
+fi
+
+tinker_log="$WORKDIR/tinker.log"
+docker run --rm -v "$(pwd)":/tools -v "$WORKDIR":/tmp \
+    --entrypoint bash ligpargen-tinker:dev -c "cd /tmp && /tools/eval_tinker_energy.sh $resname" \
+    > "$tinker_log" 2>&1 || true
+if grep -q TINKER_ENERGY "$tinker_log"; then
+    grep -E 'TINKER_ENERGY|TINKER_TERMS' "$tinker_log"
+else
+    echo "TINKER evaluation failed:"
+    cat "$tinker_log"
 fi
 
 # NAMD is optional and NOT Dockerized -- it's a licensed, proprietary

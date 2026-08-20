@@ -26,4 +26,7 @@ docker build -f Dockerfile.gmx --platform linux/amd64 -t ligpargen-gmx:dev .
 echo "Building ligpargen-lammps:dev..."
 docker build -f Dockerfile.lammps --platform linux/amd64 -t ligpargen-lammps:dev .
 
-echo "Done. All three images are ready -- see ../README.md for how to run a comparison."
+echo "Building ligpargen-tinker:dev (compiles TINKER from source -- slower, a few minutes)..."
+docker build -f Dockerfile.tinker --platform linux/amd64 -t ligpargen-tinker:dev .
+
+echo "Done. All four images are ready -- see ../README.md for how to run a comparison."

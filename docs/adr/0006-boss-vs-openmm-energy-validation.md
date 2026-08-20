@@ -1,4 +1,4 @@
-# BOSS vs. OpenMM/GROMACS/NAMD/LAMMPS single-point energy validation, and a documented residual
+# BOSS vs. OpenMM/GROMACS/NAMD/LAMMPS/TINKER single-point energy validation, and a documented residual
 
 The reusable methodology, scripts, Dockerfiles, and full gotcha list for reproducing or extending this validation live in [`tools/energy_validation/`](../../tools/energy_validation/README.md) -- read that first if you're running this again rather than just reading about what it already found.
 
@@ -105,3 +105,30 @@ Free (non-periodic) boundaries with a 100 Å cutoff give LAMMPS a true vacuum ev
 | **total** | **0.9139** | 0.9155 | 1.0447 | 0.9148 | **0.9139** |
 
 LAMMPS's total matches BOSS's printed value to within 0.00005 kcal/mol on both molecules -- the tightest of any of the four downstream engines, including per-term agreement to BOSS's own print precision. No new discrepancy found; this confirms `BOSS2LAMMPS.py`'s writer (and its `opls`/`cvff` coefficient conventions) is correct for both molecules tested.
+
+## Extending to TINKER: a real bug that made every TINKER output unusable
+
+Extended the same methodology to TINKER (source freely available on GitHub, BSD-style academic license, no separate license needed -- built from source since it's in neither Debian's apt repo nor Homebrew; see `tools/energy_validation/README.md`'s "The TINKER leg" for the build notes, including an upstream CMake-packaging gap that had to be patched around). This one found a real, serious, previously-undiscovered bug -- not a residual, a hard failure.
+
+**Bug found**: `BOSS2TINKER.py`'s `create_xyz_file()` wrote each atom's TINKER "atom type" column in the `.xyz` coordinate file as `799 + atom_index` -- an arbitrary, unique-per-atom placeholder completely disjoint from the OPLS type numbers (e.g. `145`, `146`) that every other section of the companion `.key` file (`atom`, `vdw`, `bond`, `angle`, `torsion`, `charge` records) already consistently used. Confirmed directly, not inferred: building TINKER from source and running its own `analyze` program against LigParGen's existing benzene output reported every single atom as an "Undefined Atom Type," printed "MECHANIC -- Some Required Potential Energy Parameters are Undefined," and refused to compute an energy at all. This means **every `.xyz`/`.key` pair LigParGen has ever generated for TINKER was non-functional** -- not numerically off, unusable outright the moment anyone actually tried to run it through TINKER, which this codebase apparently never had a way to do before now (no prior test exercised this).
+
+**Root cause**: `create_xyz_file()` didn't have access to the per-atom OPLS type numbers (`types`, from `bossData()`) at all -- `mainBOSS2TINKER()` only passed it the raw `molecule_data`. The `799+atom_index` value looks like a placeholder a `.txyz` atom-type column needs to be numeric-and-present, left in from early development and never replaced with the real type lookup once `bossData()`'s per-atom types became available elsewhere in the same module (`Boss2Tinker()`, called right after, already threads real OPLS numbers through every other section correctly).
+
+**Fix**: `mainBOSS2TINKER()` now calls `bossData(mol)` once and passes `types` into `create_xyz_file()`, which looks up each atom's real OPLS type number (`types[atom_number - 1][1]`) instead of the placeholder.
+
+**Post-fix result** (kcal/mol; same benzene/phenol geometries as above):
+
+| | BOSS | TINKER |
+|---|---|---|
+| benzene bond | 0.221 | 0.2209 |
+| benzene angle | 0.0 | 0.0 |
+| benzene torsion | 0.0 | 0.0 |
+| benzene nonbonded | 6.46 | 6.4598 |
+| **benzene total** | **6.6806** | **6.6806** |
+| phenol bond | 0.2192 | 0.2192 |
+| phenol angle | 0.027 | 0.027 |
+| phenol torsion | 0.0 | 0.0 |
+| phenol nonbonded | 0.67 | 0.6678 |
+| **phenol total** | **0.9139** | **0.9139** |
+
+Tied with LAMMPS as the tightest match of any of the five downstream engines -- once the atom types actually match, TINKER reproduces BOSS's own energy almost exactly. Not yet exercised: a molecule with real improper torsions (neither benzene nor phenol has any in this OPLS-AA parameterization), so `Boss2Tinker()`'s `imptors` section-writing code path remains untested by this methodology.
