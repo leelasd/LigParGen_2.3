@@ -15,7 +15,7 @@ numpy
 """
 
 from LigParGen.BOSSReader import ucomb,tor_cent
-from LigParGen.boss_common import bossData, pair_declared_torsions
+from LigParGen.boss_common import bossData, pair_declared_torsions, translate_zmat_indices
 import pickle
 import os
 import pandas as pd
@@ -43,11 +43,11 @@ ATOM_NUMBER_DICT = {'H': 1, 'He': 2, 'Li': 3, 'Be': 4,
                                      'Ra': 88, 'Ac': 89}
 
 def Boss2Tinker(resid, molecule_data, xyz_dict):
-    types, Qs, num2opls, st_no, num2typ2symb, num2pqrtype = bossData(molecule_data)
-    bnd_df = boss2CharmmBond(molecule_data, st_no)
+    types, Qs, num2opls, zmat_idx_map, num2typ2symb, num2pqrtype = bossData(molecule_data)
+    bnd_df = boss2CharmmBond(molecule_data, zmat_idx_map)
     bndlist = list(bnd_df.UR) + (list(bnd_df.UR))
-    ang_df = boss2CharmmAngle(molecule_data.MolData['ANGLES'], num2opls, st_no,num2typ2symb)
-    tor_df = Boss2CharmmTorsion(bnd_df, num2opls, st_no,
+    ang_df = boss2CharmmAngle(molecule_data.MolData['ANGLES'], num2opls, zmat_idx_map,num2typ2symb)
+    tor_df = Boss2CharmmTorsion(bnd_df, num2opls, zmat_idx_map,
                                 molecule_data, num2typ2symb)
 
     prm = open('/tmp/'+ resid + '.key', 'w+')
@@ -264,10 +264,10 @@ torsion       0    0    0    0        0.000  0.0  1  0.000 180.0  2  0.000  0.0 
 
     prm.close()
 
-def boss2CharmmBond(molecule_data, st_no):
+def boss2CharmmBond(molecule_data, zmat_idx_map):
     bdat = molecule_data.MolData['BONDS']
-    bdat['cl1'] = [x - st_no if not x - st_no < 0 else 0 for x in bdat['cl1']]
-    bdat['cl2'] = [x - st_no if not x - st_no < 0 else 0 for x in bdat['cl2']]
+    bdat['cl1'] = translate_zmat_indices(bdat['cl1'], zmat_idx_map)
+    bdat['cl2'] = translate_zmat_indices(bdat['cl2'], zmat_idx_map)
     bnd_df = pd.DataFrame(bdat)
     bnd_df['UF'] = ((bnd_df.cl1 + bnd_df.cl2) *
                     (bnd_df.cl1 + bnd_df.cl2 + 1) * 0.5) + bnd_df.cl2
@@ -278,11 +278,11 @@ def boss2CharmmBond(molecule_data, st_no):
     hb_df = hb_df.drop_duplicates()
     return bnd_df
 
-def boss2CharmmAngle(anglefile, num2opls, st_no,num2typ2symb):
+def boss2CharmmAngle(anglefile, num2opls, zmat_idx_map,num2typ2symb):
     adat = anglefile
-    adat['cl1'] = [x - st_no if not x - st_no < 0 else 0 for x in adat['cl1']]
-    adat['cl2'] = [x - st_no if not x - st_no < 0 else 0 for x in adat['cl2']]
-    adat['cl3'] = [x - st_no if not x - st_no < 0 else 0 for x in adat['cl3']]
+    adat['cl1'] = translate_zmat_indices(adat['cl1'], zmat_idx_map)
+    adat['cl2'] = translate_zmat_indices(adat['cl2'], zmat_idx_map)
+    adat['cl3'] = translate_zmat_indices(adat['cl3'], zmat_idx_map)
     ang_df = pd.DataFrame(adat)
     ang_df = ang_df[ang_df.K > 0]
 #    ang_df.to_csv('bos_angles.csv', index=False)
@@ -295,7 +295,7 @@ def boss2CharmmAngle(anglefile, num2opls, st_no,num2typ2symb):
                              for i, j, k in zip(ang_df.TI, ang_df.TJ, ang_df.TK)])
     return ang_df
 
-def Boss2CharmmTorsion(bnd_df, num2opls, st_no, molecule_data, num2typ2symb):
+def Boss2CharmmTorsion(bnd_df, num2opls, zmat_idx_map, molecule_data, num2typ2symb):
     #    print num2opls
     ats = []
     for line in molecule_data.MolData['ATOMS'][3:]:
@@ -322,11 +322,7 @@ def Boss2CharmmTorsion(bnd_df, num2opls, st_no, molecule_data, num2typ2symb):
         dhd = dhd  # kcal to kj conversion
         dhd = dhd / 2.0  # Komm = Vopls/2
         dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
-        ats = np.array(paired_ats) - st_no
-        for i in range(len(ats)):
-            for j in range(len(ats[0])):
-                if ats[i][j] < 0:
-                    ats[i][j] = 0
+        ats = np.array([translate_zmat_indices(row, zmat_idx_map) for row in paired_ats])
         at_df = pd.DataFrame(ats, columns=['I', 'J', 'K', 'L'])
     final_df = pd.concat([dhd_df, at_df], axis=1)
     final_df = final_df.reindex(at_df.index)

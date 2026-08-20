@@ -333,7 +333,15 @@ def find_boss_sections(odat, sdat, zmat_name='<zmat>'):
             impDat['PAIRfinal'] = nl
 #### THIS PART IS READ FROM SUM FILE ###
     for ml in range(len(sdat)):
-        if 'Additional Dihedrals follow' in sdat[ml]:
+        # LigParGen's own auto-generated Zmats always print this banner as
+        # "Additional Dihedrals follow (6I4)". BOSS's own reference Zmat
+        # library (molecules/small/*.z etc.) instead prints "Additional
+        # Dihedrals (6I4) - Zero types not shown" when run through xSPM
+        # alone (confirmed directly against real BOSS output for
+        # molecules/small/acetam.z) -- same section, same column format,
+        # different banner text depending on which BOSS code path wrote
+        # it. Match either.
+        if 'Additional Dihedrals follow' in sdat[ml] or 'Additional Dihedrals (' in sdat[ml]:
             impDat['ADDinit'] = ml
         elif 'Domain Definitions follow' in sdat[ml]:
             impDat['ADDfinal'] = ml

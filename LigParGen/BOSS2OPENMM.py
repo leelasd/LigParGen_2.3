@@ -16,7 +16,7 @@ numpy
 
 from LigParGen.BOSSReader import Refine_PDB_file,get_coos_from_pdb
 from LigParGen.BOSSReader import ucomb,bossPdbAtom2Element,bossElement2Mass,tor_cent
-from LigParGen.boss_common import bossData, pair_declared_torsions
+from LigParGen.boss_common import bossData, pair_declared_torsions, translate_zmat_indices
 import pickle
 import pandas as pd
 import numpy as np
@@ -39,7 +39,7 @@ def boss2opmAtom(num2typ2symb, xmlf):
     return None
 
 
-def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, xmlf):
+def boss2opmTorsion(bnd_df, num2opls, zmat_idx_map, molecule_data, xmlf):
     ats = []
     for line in molecule_data.MolData['ATOMS'][3:]:
         dt = [line.split()[0], line.split()[4],
@@ -65,11 +65,7 @@ def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, xmlf):
         dhd = dhd * 4.184  # kcal to kj conversion
         dhd = dhd / 2.0  # Komm = Vopls/2
         dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
-        ats = np.array(paired_ats) - st_no
-        for i in range(len(ats)):
-            for j in range(len(ats[0])):
-                if ats[i][j] < 0:
-                    ats[i][j] = 0
+        ats = np.array([translate_zmat_indices(row, zmat_idx_map) for row in paired_ats])
         at_df = pd.DataFrame(ats, columns=['I', 'J', 'K', 'L'])
     final_df = pd.concat([dhd_df, at_df], axis=1)
     final_df = final_df.reindex(at_df.index)
@@ -110,10 +106,10 @@ def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, xmlf):
     return None
 
 
-def boss2opmBond(num2opls, molecule_data, st_no, xmlf):
+def boss2opmBond(num2opls, molecule_data, zmat_idx_map, xmlf):
     bdat = molecule_data.MolData['BONDS']
-    bdat['cl1'] = [x - st_no if not x - st_no < 0 else 0 for x in bdat['cl1']]
-    bdat['cl2'] = [x - st_no if not x - st_no < 0 else 0 for x in bdat['cl2']]
+    bdat['cl1'] = translate_zmat_indices(bdat['cl1'], zmat_idx_map)
+    bdat['cl2'] = translate_zmat_indices(bdat['cl2'], zmat_idx_map)
     bnd_df = pd.DataFrame(bdat)
     bnd_df['T1'] = [num2opls[x] for x in bnd_df.cl1]
     bnd_df['T2'] = [num2opls[x] for x in bnd_df.cl2]
@@ -138,11 +134,11 @@ def boss2opmBond(num2opls, molecule_data, st_no, xmlf):
     return full_bnd, connects
 
 
-def boss2opmAngle(anglefile, num2opls, st_no, xmlf):
+def boss2opmAngle(anglefile, num2opls, zmat_idx_map, xmlf):
     adat = anglefile
-    adat['cl1'] = [x - st_no if not x - st_no < 0 else 0 for x in adat['cl1']]
-    adat['cl2'] = [x - st_no if not x - st_no < 0 else 0 for x in adat['cl2']]
-    adat['cl3'] = [x - st_no if not x - st_no < 0 else 0 for x in adat['cl3']]
+    adat['cl1'] = translate_zmat_indices(adat['cl1'], zmat_idx_map)
+    adat['cl2'] = translate_zmat_indices(adat['cl2'], zmat_idx_map)
+    adat['cl3'] = translate_zmat_indices(adat['cl3'], zmat_idx_map)
     ang_df = pd.DataFrame(adat)
     ang_df = ang_df[ang_df.K > 0]
     ang_df['K'] = 8.3680 * ang_df['K']
@@ -208,7 +204,7 @@ def pqr_prep(atoms, coos, resid, connects, num2pqrtype):
 
 def boss2opm(resid, molecule_data, pdb_file):
     xmlf = open(resid + '.xml', 'w+')
-    types, Qs, num2opls, st_no, num2typ2symb, num2pqrtype = bossData(
+    types, Qs, num2opls, zmat_idx_map, num2typ2symb, num2pqrtype = bossData(
         molecule_data)
     #### COLLECTING NONBONDING PART #######
     nb_part = []
@@ -225,10 +221,10 @@ def boss2opm(resid, molecule_data, pdb_file):
     xmlf.write('<Residue name=\"%s\">\n' % resid)
     for at in res_at:
         xmlf.write("%s" % at)
-    bnd_df, connects = boss2opmBond(num2opls, molecule_data, st_no, xmlf)
+    bnd_df, connects = boss2opmBond(num2opls, molecule_data, zmat_idx_map, xmlf)
     # PRINTING ANGLES AND TORSIONS
-    boss2opmAngle(molecule_data.MolData['ANGLES'], num2opls, st_no, xmlf)
-    boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, xmlf)
+    boss2opmAngle(molecule_data.MolData['ANGLES'], num2opls, zmat_idx_map, xmlf)
+    boss2opmTorsion(bnd_df, num2opls, zmat_idx_map, molecule_data, xmlf)
     #### PRINTING NONBONDING PART #######
     nnb_part = list(set(nb_part))
     xmlf.write('<NonbondedForce coulomb14scale="0.5" lj14scale="0.5">\n')
@@ -238,7 +234,17 @@ def boss2opm(resid, molecule_data, pdb_file):
     xmlf.write('</ForceField>\n')
     xmlf.close()
     pdblines = Refine_PDB_file(pdb_file)
-    atoms, coos = get_coos_from_pdb(pdblines)
+    raw_atoms, coos = get_coos_from_pdb(pdblines)
+    # Use the same (already de-duplicated, see bossData()'s
+    # _uniquify_atom_names) names the XML residue template above was
+    # written with, not whatever plt.pdb's own atom-name column happens to
+    # carry -- BOSS's own reference Zmatrices often reuse plain names like
+    # 'C' across every ring carbon, and OpenMM matches a PDB atom to its
+    # residue template entry by exact name, so these two sources have to
+    # agree. Falls back to plt.pdb's own names only if the atom counts
+    # don't line up (matches the existing size-parity check used for elems
+    # just below).
+    atoms = [types[i][0] for i in range(len(types))] if len(raw_atoms) == len(types) else raw_atoms
     elems = [num2typ2symb[i][3] for i in range(len(atoms))] if len(atoms) == len(num2typ2symb) else None
     pdb_prep(atoms, coos, resid, connects, elems)
     pqr_prep(atoms, coos, resid, connects, num2pqrtype)

@@ -16,13 +16,13 @@ numpy
 
 from LigParGen.BOSSReader import ucomb,pairing_func
 from LigParGen.BOSSReader import Refine_PDB_file,get_coos_from_pdb
-from LigParGen.boss_common import bossData, pair_declared_torsions
+from LigParGen.boss_common import bossData, pair_declared_torsions, translate_zmat_indices
 import pickle
 import pandas as pd
 import numpy as np
 
 
-def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, itpf):
+def boss2opmTorsion(bnd_df, num2opls, zmat_idx_map, molecule_data, itpf):
     ats = []
     for line in molecule_data.MolData['ATOMS'][3:]:
         dt = [line.split()[0], line.split()[4],
@@ -48,11 +48,7 @@ def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, itpf):
         dhd = dhd * 1.  # kcal to kj conversion
         dhd = dhd  # Komm = Vopls/2
         dhd_df = pd.DataFrame(dhd, columns=['V1', 'V2', 'V3', 'V4'])
-        ats = np.array(paired_ats) - st_no
-        for i in range(len(ats)):
-            for j in range(len(ats[0])):
-                if ats[i][j] < 0:
-                    ats[i][j] = 0
+        ats = np.array([translate_zmat_indices(row, zmat_idx_map) for row in paired_ats])
         at_df = pd.DataFrame(ats, columns=['I', 'J', 'K', 'L'])
     final_df = pd.concat([dhd_df, at_df], axis=1)
     final_df = final_df.reindex(at_df.index)
@@ -78,10 +74,10 @@ def boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, itpf):
         return final_df, final_df
 
 
-def boss2gmxBond(molecule_data, st_no, itpf):
+def boss2gmxBond(molecule_data, zmat_idx_map, itpf):
     bdat = molecule_data.MolData['BONDS']
-    bdat['cl1'] = [x - st_no if not x - st_no < 0 else 0 for x in bdat['cl1']]
-    bdat['cl2'] = [x - st_no if not x - st_no < 0 else 0 for x in bdat['cl2']]
+    bdat['cl1'] = translate_zmat_indices(bdat['cl1'], zmat_idx_map)
+    bdat['cl2'] = translate_zmat_indices(bdat['cl2'], zmat_idx_map)
     bnd_df = pd.DataFrame(bdat)
     bnd_df['KIJ'] = bnd_df['KIJ'] 
     bnd_df['RIJ'] = bnd_df['RIJ'] 
@@ -101,11 +97,11 @@ def boss2gmxBond(molecule_data, st_no, itpf):
     return full_bnd, connects
 
 
-def boss2gmxAngle(anglefile, num2opls, st_no, itpf):
+def boss2gmxAngle(anglefile, num2opls, zmat_idx_map, itpf):
     adat = anglefile
-    adat['cl1'] = [x - st_no if not x - st_no < 0 else 0 for x in adat['cl1']]
-    adat['cl2'] = [x - st_no if not x - st_no < 0 else 0 for x in adat['cl2']]
-    adat['cl3'] = [x - st_no if not x - st_no < 0 else 0 for x in adat['cl3']]
+    adat['cl1'] = translate_zmat_indices(adat['cl1'], zmat_idx_map)
+    adat['cl2'] = translate_zmat_indices(adat['cl2'], zmat_idx_map)
+    adat['cl3'] = translate_zmat_indices(adat['cl3'], zmat_idx_map)
     ang_df = pd.DataFrame(adat)
     ang_df = ang_df[ang_df.K > 0]
     full_ang = ang_df.copy()
@@ -116,7 +112,7 @@ def boss2gmxAngle(anglefile, num2opls, st_no, itpf):
 
 
 def boss2desmond(resid, molecule_data, pdb_file):
-    types, Qs, num2opls, st_no, num2typ2symb, num2pqrtype = bossData(
+    types, Qs, num2opls, zmat_idx_map, num2typ2symb, num2pqrtype = bossData(
         molecule_data)
     itpf = open(resid + '.cms', 'w+')
     itpf.write("""{
@@ -167,7 +163,7 @@ f_m_ct {
     xyz = molecule_data.MolData['XYZ']
     for i,r in xyz.iterrows(): 
         itpf.write('    %d        %d %10.8f %10.8f %10.8f      1 \"MOL\"     %d  \"%s\" 0.00000000 0.00000000 0.00000000\n'%(i+1,1,r.X,r.Y,r.Z,r.at_num,r.at_symb))
-    bnd_df, connects = boss2gmxBond(molecule_data, st_no, itpf)
+    bnd_df, connects = boss2gmxBond(molecule_data, zmat_idx_map, itpf)
     itpf.write('''    :::
   }
   m_bond[%d] {
@@ -226,7 +222,7 @@ f_m_ct {
     xyz = molecule_data.MolData['XYZ']
     for i,r in xyz.iterrows():
         itpf.write('    %d        %d %10.8f %10.8f %10.8f      1 \"MOL\"     %d  \"%s\" 0.00000000 0.00000000 0.00000000\n'%(i+1,1,r.X,r.Y,r.Z,r.at_num,r.at_symb))
-#    bnd_df, connects = boss2gmxBond(molecule_data, st_no, itpf)
+#    bnd_df, connects = boss2gmxBond(molecule_data, zmat_idx_map, itpf)
     itpf.write('''    :::
   }
   m_bond[%d] {
@@ -288,7 +284,7 @@ f_m_ct {
         EXCLUSIONS_12_13['BI'].append(int(r.cl1+1));
         EXCLUSIONS_12_13['BJ'].append(int(r.cl2+1)); 
         EXCLUSIONS_12_13['UID'].append(pairing_func(r.cl2+1,r.cl1+1)[0])
-    full_ang = boss2gmxAngle(molecule_data.MolData['ANGLES'], num2opls, st_no, itpf)
+    full_ang = boss2gmxAngle(molecule_data.MolData['ANGLES'], num2opls, zmat_idx_map, itpf)
     itpf.write('''      :::
     }
     ffio_angles[%d] {
@@ -306,7 +302,7 @@ f_m_ct {
         EXCLUSIONS_12_13['BI'].append(int(r.cl1+1));
         EXCLUSIONS_12_13['BJ'].append(int(r.cl3+1)); 
         EXCLUSIONS_12_13['UID'].append(pairing_func(r.cl3+1,r.cl1+1)[0])
-    full_tor, tor_df = boss2opmTorsion(bnd_df, num2opls, st_no, molecule_data, itpf)
+    full_tor, tor_df = boss2opmTorsion(bnd_df, num2opls, zmat_idx_map, molecule_data, itpf)
     itpf.write('''      :::
     }
     ffio_dihedrals[%d] {
