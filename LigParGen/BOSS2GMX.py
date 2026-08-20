@@ -239,7 +239,20 @@ def boss2gmx(resid, molecule_data, pdb_file):
                    (angs['cl1'] + 1, angs['cl2'] + 1, angs['cl3'] + 1, 1, angs['R'], angs['K']))
     full_tor, tor_df = boss2opmTorsion(
         bnd_df, num2opls, zmat_idx_map, molecule_data, itpf)
-    if len(tor_df.index) != len(full_tor.index):
+    # This used to be gated on `len(tor_df.index) != len(full_tor.index)`
+    # -- i.e. only write the [ dihedrals ] section at all if type-based
+    # deduplication happened to remove at least one row. tor_df (the
+    # deduplicated set) is never actually used for writing below (both
+    # loops read from full_tor); that comparison was only ever consulted
+    # for this gate. Whenever a molecule's declared torsions all already
+    # had distinct type-class names -- confirmed directly for a real
+    # toluene run via the live Space, k2=15.167 ring torsions and
+    # k2=10.46 planarity-enforcing impropers included -- tor_df and
+    # full_tor come out the same length, the condition was false, and the
+    # entire section silently never got written: every proper and
+    # improper torsion missing from the GROMACS output, for any molecule
+    # whose torsions don't happen to contain a same-type-class repeat.
+    if len(full_tor.index) > 0:
         itpf.write('\n[ dihedrals ]\n')
         itpf.write('; IMPROPER DIHEDRAL ANGLES \n')
         itpf.write(
