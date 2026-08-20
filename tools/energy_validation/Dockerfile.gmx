@@ -1,0 +1,10 @@
+# Adds GROMACS (freely available via Debian's own apt repo, LGPL) on top of
+# the OpenMM image, for single-point energy evaluation of generated
+# .itp/.gro pairs. See ../README.md.
+#
+# Build (after building ligpargen-openmm:dev via Dockerfile.openmm):
+#   docker build -f Dockerfile.gmx -t ligpargen-gmx:dev .
+FROM ligpargen-openmm:dev
+USER root
+RUN apt-get update -qq && apt-get install -y --no-install-recommends gromacs && rm -rf /var/lib/apt/lists/*
+ENTRYPOINT ["/bin/bash"]

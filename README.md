@@ -64,6 +64,7 @@ Live at **https://huggingface.co/spaces/lsdodda/ligpargen**. The [`space/`](spac
 ```
 LigParGen/          the Python package (CLI entry point: LigParGen.Converter:main)
 space/               Hugging Face Space (Gradio web app)
+tools/energy_validation/  BOSS vs. OpenMM/GROMACS single-point energy validation (see its own README)
 docs/adr/            architecture decision records
 docs/agents/         issue-tracker/domain-doc config for AI coding agents
 tests/fixtures/      regression fixtures (real BOSS-generated reference outputs)
